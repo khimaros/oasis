@@ -1,10 +1,10 @@
 //! runs the portal on a development host. configured through environment
 //! variables so that the end-to-end tests can shrink limits and pick ports.
 
-use oasis_portal::{Config, Portal, Space, dns};
+use oasis_portal::{Config, Portal, Space, dhcp, dns, mdns, sni};
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -75,12 +75,45 @@ fn main() -> io::Result<()> {
         worker_stack: WORKER_STACK,
         board_bytes: var("OASIS_BOARD_BYTES", 1200 * 1000),
         segment_bytes: var("OASIS_SEGMENT_BYTES", 8000),
+        index_replies: var("OASIS_INDEX_REPLIES", 0) != 0,
+        max_users: var("OASIS_MAX_USERS", 100),
+        max_mailboxes: var("OASIS_MAX_MAILBOXES", 100),
+        mailbox_bytes: var("OASIS_MAILBOX_BYTES", 8000),
         chat_interval: Duration::from_millis(var("OASIS_CHAT_INTERVAL_MS", 1000)),
         board_interval: Duration::from_millis(var("OASIS_BOARD_INTERVAL_MS", 10_000)),
     };
     let dns_ip: Ipv4Addr = var("OASIS_DNS_IP", Ipv4Addr::LOCALHOST);
     let dns_socket = UdpSocket::bind(&dns_addr)?;
     thread::spawn(move || dns::serve(dns_socket, dns_ip));
+    // the device's platform or its own wiring provides these two. here
+    // they only run when a test asks for them
+    if let Ok(addr) = env::var("OASIS_DHCP_ADDR") {
+        let pool = dhcp::Pool {
+            server: dns_ip,
+            first: var("OASIS_DHCP_FIRST", 2),
+            last: var("OASIS_DHCP_LAST", 254),
+            lease: Duration::from_secs(var("OASIS_DHCP_LEASE_SECS", 7200)),
+        };
+        let socket = UdpSocket::bind(addr)?;
+        thread::spawn(move || dhcp::serve(socket, pool));
+    }
+    if let Ok(addr) = env::var("OASIS_MDNS_ADDR") {
+        let name: String = var("OASIS_MDNS_NAME", "oasis.local".into());
+        let socket = UdpSocket::bind(addr)?;
+        thread::spawn(move || mdns::serve(socket, &name, dns_ip));
+    }
+    // a host has no tls. this listener only applies the filter that decides
+    // which clients the device's https listener answers, for the tests
+    if let Ok(addr) = env::var("OASIS_HTTPS_ADDR") {
+        let (https, names) = (TcpListener::bind(addr)?, config.aliases.clone());
+        thread::spawn(move || {
+            for mut stream in https.incoming().flatten() {
+                if sni::addressed_to(&stream, &names).unwrap_or(false) {
+                    let _ = stream.write_all(b"tls");
+                }
+            }
+        });
+    }
     let listener = TcpListener::bind(&http_addr)?;
     println!("oasis portal on http://{http_addr}/ dns on {dns_addr}");
     oasis_portal::serve(Arc::new(Portal::new(config)?), listener)

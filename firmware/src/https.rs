@@ -5,7 +5,7 @@
 
 use esp_idf_svc::sys::EspError;
 use esp_idf_svc::tls::{EspTls, ServerConfig, Socket, X509};
-use oasis_portal::http;
+use oasis_portal::{http, sni};
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, IntoRawFd};
 use std::time::Duration;
@@ -51,9 +51,13 @@ fn redirect(stream: TcpStream, location: &str) -> Result<(), EspError> {
 }
 
 /// serves one connection at a time, forever. a handshake needs tens of KB
-/// of heap, so they are not run in parallel.
-pub fn serve(listener: TcpListener, location: String) {
+/// of heap, so they are not run in parallel, and clients that ask for a
+/// host other than `names` are hung up on before it starts.
+pub fn serve(listener: TcpListener, location: String, names: Vec<String>) {
     for stream in listener.incoming().flatten() {
+        if !sni::addressed_to(&stream, &names).unwrap_or(false) {
+            continue;
+        }
         if let Err(err) = redirect(stream, &location) {
             log::debug!("https: {err}");
         }

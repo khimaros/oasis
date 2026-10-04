@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/portal", "crates/host"]
+members = ["crates/portal", "crates/host", "crates/rpi"]
 # built separately with the xtensa toolchain, see firmware/rust-toolchain.toml
 exclude = ["firmware"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "GPLv3"

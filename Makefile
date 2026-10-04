@@ -9,10 +9,19 @@ TLS_CERT := firmware/tls/cert.pem
 TLS_DAYS := 7300
 # the firmware directory selects the xtensa toolchain via rust-toolchain.toml
 FIRMWARE_CARGO := . ./$(ESP_ENV) && cd firmware && $(MISE) cargo
+RPI_TARGET := aarch64-unknown-linux-musl
+RPI_BINARY := target/$(RPI_TARGET)/release/oasis-rpi
+RPI_OUT := target/rpi
+RPI_CACHE := .cache/rpi
+# megabytes of the data partition. the limits of the portal grow with it
+RPI_DATA_MB ?= 2048
+# the build time settings of the firmware, passed on the kernel command line
+RPI_SETTINGS := $(if $(OASIS_SSID),oasis.ssid="$(OASIS_SSID)") \
+	$(if $(OASIS_ADMIN_TOKEN),oasis.admin_token=$(OASIS_ADMIN_TOKEN))
 
-.PHONY: build setup host firmware flash monitor backup run test-e2e test-browser precommit clean
+.PHONY: build setup host firmware rpi rpi-image flash monitor backup run test-e2e test-browser test-rpi precommit clean
 
-build: host firmware
+build: host firmware rpi
 
 # one time install of the pinned toolchain
 setup:
@@ -34,6 +43,18 @@ $(TLS_CERT):
 
 firmware: $(TLS_CERT)
 	$(FIRMWARE_CARGO) build --release
+
+# static binary for the raspberry pi 4. the crypto library of its https
+# listener has parts in C, which the host's clang compiles for arm
+rpi:
+	CC_aarch64_unknown_linux_musl=clang AR_aarch64_unknown_linux_musl=llvm-ar \
+		$(MISE) cargo build --release -p oasis-rpi --target $(RPI_TARGET)
+
+# sd card image, written to $(RPI_OUT)/oasis-rpi4.img. needs mkfs.vfat,
+# mcopy, and mke2fs. e.g. `OASIS_SSID=camp RPI_DATA_MB=16000 make rpi-image`
+rpi-image: rpi $(TLS_CERT)
+	$(MISE) python tools/rpi_image.py --binary $(RPI_BINARY) --tls $(dir $(TLS_CERT)) \
+		--cache $(RPI_CACHE) --out $(RPI_OUT) --data-mb $(RPI_DATA_MB) --cmdline '$(strip $(RPI_SETTINGS))'
 
 flash: firmware
 	$(MISE) espflash flash --port $(PORT) --baud $(BAUD) --partition-table firmware/partitions.csv $(FIRMWARE)
@@ -57,13 +78,18 @@ test-e2e: host
 test-browser: host
 	$(MISE) sh tests/browser/run.sh
 
+# boots the sd card image in qemu, which emulates the pi but not its wifi.
+# needs qemu-system-aarch64
+test-rpi: rpi-image
+	$(MISE) python -m unittest discover -s tests/rpi -v
+
 precommit: $(TLS_CERT)
 	$(MISE) cargo fmt --all --check
 	$(MISE) cargo clippy --all-targets -- -D warnings
 	cd firmware && $(MISE) cargo fmt --check
 	$(FIRMWARE_CARGO) clippy --release -- -D warnings
-	$(MISE) ruff check tests
-	$(MISE) ruff format --check tests
+	$(MISE) ruff check tests tools
+	$(MISE) ruff format --check tests tools
 
 clean:
 	$(MISE) cargo clean

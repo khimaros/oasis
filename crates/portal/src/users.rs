@@ -12,7 +12,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const MAX_USERS: usize = 100;
 const NAME_MAX: usize = 24;
 const DESCRIPTION_MAX: usize = 160;
 const PASSWORD_MIN: usize = 6;
@@ -81,6 +80,7 @@ pub struct Users {
     secret: u64,
     /// oldest account first
     users: VecDeque<User>,
+    max_users: usize,
 }
 
 /// seeded fnv-1a with the murmur3 finalizer. fnv alone leaves the high bits
@@ -137,12 +137,12 @@ fn password_hash(password: &str, salt: &str) -> String {
 }
 
 impl Users {
-    pub fn open(dir: &Path) -> io::Result<Users> {
+    pub fn open(dir: &Path, max_users: usize) -> io::Result<Users> {
         fs::create_dir_all(dir)?;
         let stored = fs::read_to_string(dir.join(USERS_FILE)).unwrap_or_default();
         let users = stored.lines().filter_map(User::parse).collect();
         let (salt, secret) = (load_or_create(&dir.join(SALT_FILE))?, load_or_create(&dir.join(SECRET_FILE))?);
-        Ok(Users { dir: dir.to_path_buf(), salt, secret, users })
+        Ok(Users { dir: dir.to_path_buf(), salt, secret, users, max_users })
     }
 
     /// id of the device with this mac, used for its generated name.
@@ -187,7 +187,7 @@ impl Users {
         if self.find(name).is_some() {
             return Ok(Err(Rejected::Taken));
         }
-        let full = self.users.len() >= MAX_USERS;
+        let full = self.users.len() >= self.max_users;
         let evicted = full.then(|| self.users.pop_front()).flatten().map(|user| user.id);
         let salt = format!("{:016x}", random());
         let hash = password_hash(password, &salt);

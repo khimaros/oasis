@@ -4,9 +4,12 @@
 
     crates/portal   platform independent portal, std only, zero dependencies
     crates/host     runs the portal on a development host
+    crates/rpi      raspberry pi 4 binary: init of a linux image, then the portal
     firmware        ESP32 binary: wifi access point + littlefs, then the portal
+    tools           builds the sd card image of the raspberry pi
     tests/e2e       python tests that drive the host binary over sockets
     tests/browser   a headless chrome that clicks through the page
+    tests/rpi       boots the raspberry pi image in qemu
 
 `firmware` is excluded from the cargo workspace because it builds with the
 xtensa rust fork (`firmware/rust-toolchain.toml`) and `build-std`.
@@ -31,6 +34,16 @@ component. clients with Private DNS or DNS over HTTPS never ask our dns, so
 names only it knows fail for them, while `.local` is resolved by multicast.
 `Config.aliases` lists such names: they are served without a redirect and
 sent to clients in the poll response.
+
+linux has neither a dhcp server nor an mdns responder in the kernel, so the
+raspberry pi runs the ones of the portal crate:
+
+- `dhcp.rs` leases the addresses .2 to .254 for two hours, with the portal
+  as router and dns server. leases live in RAM. a client that comes back
+  after a reboot asks for its old address and gets it unless it is taken.
+  replies to clients without an address are broadcast
+- `mdns.rs` answers A queries for `oasis.local` by multicast, or directly
+  when the query came from a port other than 5353
 
 captive sign-in windows are embedded web views that often lack WebRTC and
 downloads. `index.html` recognizes them by user agent, a heuristic that
@@ -92,6 +105,14 @@ named by a prefix and the id of their first record.
 - only the list of segment ids lives in RAM
 - a record torn by power loss is dropped at the next boot
 - deletions are ids appended to a `deleted` file
+- a log too large to scan keeps an index (`Config.index_replies`, for the
+  reply logs): which segments hold records of each reference. it is a map
+  in RAM and an `index` file of `[reference u32][segment u32]` entries. an
+  entry is written ahead of the first record it stands for, so power loss
+  leaves at worst an entry that points at a segment without such a record.
+  entries of evicted segments are dropped at boot, and a missing file is
+  rebuilt from the records. the ESP32 goes without: its reply log is 22
+  segments, and the map has no fixed bound
 
 a littlefs directory costs two blocks of 4096 bytes, and a file larger
 than about 500 bytes costs whole blocks. so logs do not get a directory
@@ -187,7 +208,11 @@ window reacts to the untrusted certificate by offering "continue anyway
 via browser", which opens the link in the real browser. the browser warns
 once more. whoever accepts is redirected to plain http. the listener
 serves nothing else and handles one connection at a time, since a
-handshake needs tens of KB of heap. the certificate and key are created
+handshake needs tens of KB of heap. since the dns answers every name with
+our address, the port also gets the https traffic that phones mean for the
+internet. `crates/portal/src/sni.rs` reads the server name of each client
+hello, and the listener hangs up before the handshake unless the name is
+ours or absent, as it is for `https://10.0.0.1/`. the certificate and key are created
 per checkout by `make` (needs `openssl`) and are not in version control.
 the page also tells android users how to do it by hand, and to pick "use
 this network as is" if the portal does not load in their browser. from then on the
@@ -206,7 +231,10 @@ says about its partitions (`Config.space`, in `firmware/src/space.rs`: the
 firmware image, the data partition, the settings partition, and the heap).
 
 notifications cost the device almost nothing. `events.rs` keeps the last
-64 replies in RAM: topic, thread, reply id, and who wrote it. a client
+64 replies in RAM: topic, thread, reply id, who wrote it, and a one line
+excerpt of 48 bytes. `mail.rs` keeps the same kind of notice for the last
+64 unread mails of all mailboxes together, and sends a client the newest
+8 of its own with the poll. the page draws one row per reply and per mail. a client
 sends the id of the last one it saw with its poll and gets the newer ones.
 which threads a visitor takes part in is only known to the page, which
 remembers the threads it started or replied to in `localStorage` and turns
@@ -230,6 +258,21 @@ place was reached from inside the page, and otherwise goes one level up, so
 that it never leaves the oasis. sign up and the profile form are the
 `account` view of the main page. `#admin` is not a place: it switches the
 admin token field on for the visit and continues to the board.
+
+## writing
+
+writing happens in a dock between the content and the tab bar, so it stays
+at the bottom and above the keyboard. the forms for a new thread, a reply,
+and a mail are closed by default: the dock then holds an action button at
+its right. it opens the form that fits the current place as a panel with a
+title line, a cross that closes it, and a send icon in the place of the
+action button. a reply button on a mail or the "send mail" button of a
+profile opens the mail panel addressed. sending closes the panel again.
+chat keeps its panel open, since writing is all one does there.
+
+what the device refuses, such as mail to an unknown name, is shown in a
+small dialog with an okay button. while the device does not answer the
+poll, the status button in the header is red, without a dialog or text.
 
 ## look of the page
 
@@ -270,7 +313,63 @@ local addresses behind mDNS names in ICE candidates. the receiver replaces
 those names with the address the device observed, so connections do not
 depend on multicast working across the access point.
 
+## raspberry pi
+
+`crates/rpi` is one static binary (`aarch64-unknown-linux-musl`) that runs
+as the init of a stock raspberry pi kernel. nothing else is on the card: a
+shell, a service manager, and hostapd are all absent. linux provides what
+ESP-IDF provides on the ESP32, `std::net` and `std::fs`, so the portal crate
+is the same (R12).
+
+`tools/rpi_image.py` builds the card image:
+
+- partition 1, FAT: the pi's boot firmware, the kernel, `config.txt`,
+  `cmdline.txt`, and the initramfs
+- the initramfs: the binary as `/init`, the modules of the wifi driver
+  (`brcmfmac` and what it depends on), the firmware of the wifi chip, and
+  the certificate of the https listener
+- partition 2, ext4, labeled `oasis`: the data. the init finds it by its
+  label, since the kernel numbers disks in the order it finds them
+
+kernel, modules, and chip firmware are downloaded by commit and checked
+against `tools/rpi.lock`. the archive and both file systems are written
+with fixed ids and timestamps, so the same inputs give the same image.
+
+what the init does (`main.rs`), and with which part of the kernel:
+
+- mounts `/dev`, `/proc`, `/sys` (`init.rs`)
+- loads the wifi driver. `init.rs` reads `modules.dep` like modprobe does.
+  the driver asks the kernel for a second, vendor specific module once it
+  has identified the chip, and the kernel runs `/sbin/modprobe` for that,
+  which is a link to the same binary
+- turns the interface into an access point and starts an open network
+  (`wifi.rs`, nl80211). the chip is "fullmac": its firmware beacons and
+  associates clients, so three requests replace hostapd
+- sets the address (`link.rs`, rtnetlink). `netlink.rs` is the socket
+  protocol under both
+- mounts the data partition
+- starts `dhcp.rs`, `mdns.rs`, and `dns.rs` of the portal crate, then
+  `https.rs` (rustls) and the portal
+
+the kernel panics when init ends, so on an error the init logs it, waits,
+and reboots.
+
+`Config.mac_of` reads the kernel's arp table, which also knows clients that
+configured their address by hand. `Config.stations` asks the wifi driver.
+
+the limits follow the size of the data partition: half of it for the board,
+a quarter for mail at 64KB per mailbox, and 10000 accounts. the rest covers
+the block rounding of ext4, whose inodes are sized for one file per 4KB.
+
+settings are words on the kernel command line (`cmdline.txt`), which can be
+edited on the card without a rebuild: `oasis.ssid`, `oasis.admin_token`,
+and `oasis.interface`. an interface that is not wifi, such as `eth0`, gets
+the address and the services without an access point. the qemu test uses
+`lo`, since qemu emulates neither the wifi chip nor the ethernet port.
+
 ## limits
+
+the numbers of the ESP32. the raspberry pi has its own, see above.
 
 | what                    | limit        |
 |-------------------------|--------------|

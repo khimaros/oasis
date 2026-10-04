@@ -6,18 +6,18 @@ use std::net::{Ipv4Addr, UdpSocket};
 use std::thread;
 use std::time::Duration;
 
-const HEADER_LEN: usize = 12;
+pub(crate) const HEADER_LEN: usize = 12;
 const MAX_PACKET: usize = 512;
 const TTL_SECS: u8 = 60;
-const TYPE_A: u16 = 1;
-const CLASS_IN: u16 = 1;
-const FLAG_RESPONSE: u8 = 0x80;
-const FLAG_AUTHORITATIVE: u8 = 0x04;
+pub(crate) const TYPE_A: u16 = 1;
+pub(crate) const CLASS_IN: u16 = 1;
+pub(crate) const FLAG_RESPONSE: u8 = 0x80;
+pub(crate) const FLAG_AUTHORITATIVE: u8 = 0x04;
 const FLAG_RECURSION_AVAILABLE: u8 = 0x80;
 // opcode and recursion desired are echoed back from the query
 const QUERY_FLAGS_KEPT: u8 = 0x79;
-const LABEL_POINTER: u8 = 0xC0;
-const ERROR_BACKOFF: Duration = Duration::from_millis(100);
+pub(crate) const LABEL_POINTER: u8 = 0xC0;
+pub(crate) const ERROR_BACKOFF: Duration = Duration::from_millis(100);
 
 fn u16_at(buf: &[u8], pos: usize) -> u16 {
     u16::from_be_bytes([buf[pos], buf[pos + 1]])

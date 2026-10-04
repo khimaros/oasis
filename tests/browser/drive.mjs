@@ -62,7 +62,38 @@ await a.run("document.querySelectorAll('#topics .entry')[2].click(); 1");
 await a.until("!document.getElementById('threads').hidden", 'threads view');
 check('breadcrumb names the topic', await a.run(text('place')) === 'marketplace');
 const right = selector => `Math.round(document.querySelector('${selector}').getBoundingClientRect().right)`;
-check('the post button is right aligned', await a.run(`${right('#threadform button')} === ${right('#threadtext')}`));
+// the header buttons keep one distance: to the band above, to each other,
+// and to the edge of the screen
+check('the space right of the account button equals the space above and left of it', await a.run(`(() => {
+  const [account, status, band] = [who, info, document.getElementById('band')].map(node => node.getBoundingClientRect());
+  const spaces = [document.body.getBoundingClientRect().right - account.right, account.top - band.bottom, account.left - status.right];
+  return spaces.every(space => Math.round(space) === Math.round(spaces[0]));
+})()`));
+// writing is behind an action button, not a form above the list
+const visible = id => `getComputedStyle(${id}).display !== 'none'`;
+check('the new thread form is closed until asked for', await a.run(`!(${visible('threadform')}) && ${visible('write')}`));
+const spot = selector => `JSON.stringify(['left', 'top'].map(side => Math.round(document.querySelector('${selector}').getBoundingClientRect()[side])))`;
+const writeSpot = await a.run(spot('#write'));
+await a.run('write.click(); 1');
+check('the send button takes the exact place of the action button', await a.run(spot('#threadform > button')) === writeSpot);
+check('the action button gives way to the panel', await a.run(`${visible('threadform')} && !(${visible('write')})`));
+const edge = (selector, side) => `Math.round(document.querySelector('${selector}').getBoundingClientRect().${side})`;
+// every panel is on the grid of the chat box: half a rem around and
+// between its parts, and one line fields as tall as the button
+const box = id => `${id}.getBoundingClientRect()`;
+check('the parts of a panel are spaced like the chat box', await a.run(`[
+  ${box('subject')}.left - ${box('threadform')}.left, ${box('threadtext')}.top - ${box('subject')}.bottom,
+  ${box('threadform')}.bottom - ${box("threadform.querySelector(':scope > button')")}.bottom,
+  ${box("threadform.querySelector(':scope > button')")}.top - ${box('threadtext')}.bottom,
+].every(space => Math.round(space) === 8) && Math.round(${box('subject')}.height) === 40`));
+check('the panel is docked right above the tab bar', await a.run(`${edge('nav', 'top')} - ${edge('#threadform', 'bottom')} < 16`));
+check('the panel says what it is', (await a.run("threadform.querySelector('.title').innerText")).trim() === 'new thread');
+await a.run("threadform.querySelector('.title button').click(); 1");
+check('the cross closes the panel and the action button is back', await a.run(`!(${visible('threadform')}) && ${visible('write')}`));
+await a.run('write.click(); 1');
+const sendIcon = form => `${form}.querySelector(':scope > button use, .row button use').getAttribute('href') === '#send'`;
+check('the panel sends with an icon at its bottom right', await a.run(
+  `${sendIcon('threadform')} && threadform.innerText.trim() === 'new thread' && ${right('#threadform > button')} === ${right('#threadtext')}`));
 await a.run("subject.value = 'bike for trade'; threadtext.value = 'red, 3 gears\\nneeds a chain'; threadform.requestSubmit(); 1");
 await a.until("document.querySelector('#threadlist .entry')", 'thread appears');
 check('thread list shows the subject', (await a.run(text('threadlist'))).includes('bike for trade'));
@@ -104,7 +135,19 @@ check('the arrow shows inside a topic', await a.run('back.offsetWidth === back.o
 await a.run("show('chat'); 1");
 check('the arrow is gone on other tabs', await a.run(`!(${shown})`));
 await a.run("show('board'); 1");
-check('status line is clean', await a.run("document.querySelector('header .status').textContent") === '');
+check('no dialog came up', await a.run(`!(${visible('refusal')})`));
+check('posting closes the form again', await a.run(`!(${visible('threadform')})`));
+check('there is no action button on the topic list or in chat', await a.run(`!(${visible('write')})`));
+
+// --- network trouble ---
+// shown by the status button turning red, not by text in the page
+await a.run('window.realFetch = fetch; fetch = () => Promise.reject(new Error("offline")); 1');
+await a.until("info.classList.contains('down')", 'the status button turns red');
+await a.run("show('mail'); show('board'); 1");
+check('a lost connection turns the status button red, without a dialog', await a.run(
+  `getComputedStyle(info).backgroundColor === 'rgb(240, 138, 122)' && !(${visible('refusal')})`));
+await a.run('fetch = realFetch; 1');
+await a.until("!info.classList.contains('down')", 'the status button recovers');
 
 // --- account ---
 await a.run("who.click(); username.value = 'ada'; password.value = 'hunter22'; description.value = 'gardener'; join.requestSubmit(); 1");
@@ -119,7 +162,28 @@ await a.until("mailtab.textContent === 'mail (1)'", 'unread count shows');
 await a.run("show('mail'); 1");
 await a.until("maillist.innerText.includes('hello from a guest')", 'mail arrives');
 check('mail names the guest who sent it', (await a.run(text('maillist'))).includes(`from ${guest}`));
-await a.run("[...document.querySelectorAll('#maillist button')].find(x => x.textContent === 'reply').click(); mailtext.value = 'hello back'; mailform.requestSubmit(); 1");
+const replyButton = "document.querySelector('#maillist button[title=reply]')";
+check('the reply button on a mail is a filled icon', await a.run(
+  `getComputedStyle(${replyButton}).backgroundColor === 'rgb(143, 195, 238)' && ${replyButton}.textContent === '' && ${replyButton}.querySelector('use').getAttribute('href') === '#reply'`));
+const gap = side => `Math.round(${replyButton}.closest('.entry').getBoundingClientRect().${side} - ${replyButton}.getBoundingClientRect().${side})`;
+// one distance for the page margin, the space between cards, and the
+// padding of a card on every side
+const cardGap = `Math.round(${replyButton}.closest('.entry').getBoundingClientRect().left - document.body.getBoundingClientRect().left)`;
+const textTop = `(() => { const entry = ${replyButton}.closest('.entry'); return Math.round(entry.querySelector('.meta').getBoundingClientRect().top - entry.getBoundingClientRect().top); })()`;
+check('it sits at the bottom right of the mail, as far from the edges as the text is', await a.run(
+  `[${gap('right')}, ${gap('bottom')}, ${textTop}, parseFloat(getComputedStyle(${replyButton}.closest('.entry')).paddingLeft)].every(space => Math.round(space) === ${cardGap})`));
+check('the tab bar is as far below the dock as cards are apart', await a.run(
+  `Math.round(document.querySelector('nav').getBoundingClientRect().top - write.getBoundingClientRect().bottom) === ${cardGap} + 8`));
+check('the mail form is closed until asked for', await a.run(`!(${visible('mailform')}) && ${visible('write')}`));
+await a.run(`${replyButton}.click(); 1`);
+check('reply opens the mail form, addressed', await a.run(`${visible('mailform')} && mailto.value === ${JSON.stringify(guest)}`));
+// a refusal by the device is a small dialog that goes away on okay
+await a.run("mailto.value = 'nobody-at-all'; mailtext.value = 'hello?'; mailform.requestSubmit(); 1");
+await a.until(visible('refusal'), 'the refusal shows');
+check('a refusal is shown in a dialog', (await a.run(text('refused'))) === 'nobody here by that name');
+await a.run('okay.click(); 1');
+check('okay closes the dialog and keeps the form', await a.run(`!(${visible('refusal')}) && ${visible('mailform')}`));
+await a.run(`mailto.value = ${JSON.stringify(guest)}; mailtext.value = 'hello back'; mailform.requestSubmit(); 1`);
 await b.until("mailtab.textContent === 'mail (1)' || maillist.innerText.includes('hello back')", 'reply reaches the guest');
 await b.run("show('mail'); 1");
 await b.until("maillist.innerText.includes('from ada')", 'guest reads the reply');
@@ -147,7 +211,23 @@ await b.run("replytext.value = 'would you take a stove for it?'; replyform.reque
 await a.until("bell.classList.contains('on')", 'the bell rings');
 await a.run('bell.click(); 1');
 await a.until("location.hash === '#notes' && notelist.innerText.includes('bike for trade')", 'notification view');
-check('a reply to our thread is announced with who replied', (await a.run('notelist.innerText')).includes(`${guest} replied`));
+const firstNote = await a.run("document.querySelector('#notelist .entry').innerText");
+check('a reply is announced on two lines: who replied where, and how it starts',
+  firstNote.split('\n').length === 2 && firstNote.includes(`${guest} replied in bike for trade`) && firstNote.includes('would you take a stove for it?'));
+// every reply and every mail is a notification of its own, and mail says who it is from
+await b.run("replytext.value = 'or a lamp?'; replyform.requestSubmit(); 1");
+await a.until("document.querySelectorAll('#notelist .entry').length === 2", 'a second reply is a second notification');
+await b.run("show('mail'); mailto.value = 'ada'; mailtext.value = 'one more thing'; mailform.requestSubmit(); 1");
+await a.until("document.querySelectorAll('#notelist .entry').length === 3", 'a mail is a notification');
+const icons = await a.run("[...document.querySelectorAll('#notelist .entry use')].map(use => use.getAttribute('href')).sort().join()");
+check(`each kind of notification has its icon (${icons})`, icons === '#bubble,#bubble,#envelope');
+const mailNote = await a.run("[...document.querySelectorAll('#notelist .entry')].find(row => row.innerText.includes('mail from')).innerText");
+check('a mail notification says who it is from and how it starts', mailNote === `mail from ${guest}\none more thing`);
+await a.run("[...document.querySelectorAll('#notelist .entry')].find(row => row.innerText.includes('mail from')).click(); 1");
+await a.until("tab === 'mail' && maillist.innerText.includes('one more thing')", 'the mail note leads to the mailbox');
+await a.run("show('notes'); 1");
+await a.until("document.querySelectorAll('#notelist .entry').length === 2", 'reading mail clears its notifications');
+check('reading the mail clears its notification only', true);
 await a.run("document.querySelector('#notelist .entry').click(); 1");
 await a.until("location.hash === '#board/marketplace/1' && replylist.innerText.includes('stove')", 'the note leads to the thread');
 check('opening the thread clears the notification', await a.run("!bell.classList.contains('on')"));
@@ -155,6 +235,13 @@ const ownNews = await b.run('JSON.stringify({ notes, mail: me.mail })');
 check(`our own replies do not ring the bell (${ownNews})`, await b.run("!bell.classList.contains('on')"));
 
 // --- chat and profile ---
+await a.run("show('chat'); 1");
+check('chat has its panel docked, with a send icon and no cross', await a.run(
+  `${visible('chatform')} && ${sendIcon('chatform')} && !chatform.querySelector('.title') && ${edge('nav', 'top')} - ${edge('#chatform', 'bottom')} < 16`));
+const chatSpot = await a.run(spot('#chatform button'));
+await a.run("show('mail'); 1");
+check('the chat panel stays on the chat tab', await a.run(`!(${visible('chatform')}) && ${visible('write')}`));
+check('the action button is where the send button of chat is', await a.run(spot('#write')) === chatSpot);
 await a.run("show('chat'); chattext.value = 'hello from ada'; chatform.requestSubmit(); 1");
 await b.until("chatlog.innerText.includes('hello from ada')", 'chat reaches the other tab');
 await b.run("show('chat'); [...document.querySelectorAll('#chatlog span')].find(s => s.textContent === 'ada').click(); 1");

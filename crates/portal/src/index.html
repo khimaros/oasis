@@ -10,11 +10,13 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%235fbf9f'/%3E%3C/svg%3E">
 <style>
   /* one corner radius for everything, and a sky blue accent for the active
-     tab, the main button, and the account */
-  :root { color-scheme: dark; --fg: #e8e6df; --dim: #8f8c82; --bg: #14130f; --card: #23211a; --line: #322f27; --accent: #8fc3ee; --r: 0.4rem; }
+     tab, the main button, and the account. two distances: `--gap` around
+     the page, between cards, and inside a card on every side. `--tight`
+     between the parts of one card or panel, and around those of a panel */
+  :root { color-scheme: dark; --fg: #e8e6df; --dim: #8f8c82; --bg: #14130f; --card: #23211a; --line: #322f27; --accent: #8fc3ee; --r: 0.4rem; --gap: 0.75rem; --tight: 0.5rem; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { display: flex; flex-direction: column; height: var(--vh, 100dvh); margin: 0 auto; max-width: 40rem; padding: 0.4rem 1rem 0; overflow: hidden; font: 16px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+  body { display: flex; flex-direction: column; height: var(--vh, 100dvh); margin: 0 auto; max-width: 40rem; padding: 0.4rem var(--gap) 0; overflow: hidden; font: 16px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
   main { flex: 1; min-height: 0; overflow-y: auto; }
   h2 { margin: 0; font-size: 1.4rem; font-weight: 600; }
   p { margin: 0; }
@@ -24,22 +26,19 @@
   /* controls. filled accent: the main action. outlined: a way to skip */
   button, input, textarea, a.go { font: inherit; color: inherit; background: var(--card); border: 0; border-radius: var(--r); padding: 0.7rem 1rem; }
   button, a.go { cursor: pointer; text-align: center; text-decoration: none; }
-  input, textarea { display: block; width: 100%; margin-bottom: 0.5rem; }
+  input, textarea { display: block; width: 100%; margin-bottom: var(--tight); padding-inline: var(--gap); }
   textarea { resize: none; }
   ::placeholder { color: var(--dim); }
   button.go, a.go, button.on { background: var(--accent); color: var(--bg); font-weight: 600; }
   .quiet { background: none; border: 1px solid var(--line); }
   .wide { display: block; width: 100%; }
-  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+  .row { display: flex; gap: var(--tight); align-items: center; margin-bottom: var(--tight); }
   .row input, .row textarea { flex: 1; margin: 0; }
-  /* fields above each other, with the button at the right like in a row */
-  .stack { display: flex; flex-direction: column; margin-bottom: 0.75rem; }
-  .stack button { align-self: flex-end; }
-  .pair { display: flex; gap: 0.5rem; }
+  .pair { display: flex; gap: var(--tight); }
   .pair > * { flex: 1; }
 
   /* header: two equal squares around the name of the place */
-  header .row { height: 4rem; gap: 0.75rem; margin: 0; }
+  header .row { height: calc(2.5rem + 2 * var(--gap)); gap: var(--gap); margin: 0; }
   #place { flex: 1; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .square { flex: none; display: grid; place-items: center; width: 2.5rem; height: 2.5rem; padding: 0; }
   .square svg { width: 1.125rem; height: 1.125rem; }
@@ -50,39 +49,72 @@
   section.on { display: block; }
   #chat.on { display: flex; flex-direction: column; height: 100%; }
   #chatlog { flex: 1; min-height: 0; overflow-y: auto; }
-  .entry { position: relative; background: var(--card); border-radius: var(--r); padding: 0.85rem 1rem; margin-bottom: 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .dot { padding-left: 2.4rem; }
-  .dot::before { content: ""; position: absolute; left: 1rem; top: 1.25rem; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--dot); }
-  .meta, .status { color: var(--dim); font-size: 0.8125rem; }
+  .entry { position: relative; background: var(--card); border-radius: var(--r); padding: var(--gap); margin-bottom: var(--gap); white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* the dot is centered on the first line */
+  .dot { padding-left: calc(2 * var(--gap) + 0.6rem); }
+  .dot::before { content: ""; position: absolute; left: var(--gap); top: calc(var(--gap) + 0.425rem); width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--dot); }
+  .meta { color: var(--dim); font-size: 0.8125rem; }
   .name { text-decoration: underline; cursor: pointer; }
-  .meta button { padding: 0.1rem 0.5rem; margin-left: 0.5rem; font-size: 0.8125rem; background: var(--bg); }
-  .status { min-height: 1.2rem; }
+  /* small actions on a message: reply, pin, delete. outlined in the accent so that they read as buttons */
+  .meta button { padding: 0.25rem 0.7rem; margin-left: 0.5rem; font-size: 0.8125rem; background: none; border: 1px solid var(--accent); color: var(--accent); }
+  /* the reply icon of a mail sits below its text, at the right */
+  .entry > .square { width: 2.25rem; height: 2.25rem; margin: var(--tight) 0 0 auto; }
+  /* what the device refused, in a small dialog above everything else */
+  #refusal { position: fixed; inset: 0; z-index: 3; display: grid; place-items: center; padding: var(--gap); background: #0009; }
+  #refusal .card { width: 100%; max-width: 20rem; gap: var(--gap); }
+  #refusal button { align-self: flex-end; }
 
   /* status: a name, a figure at the right, and a bar for how full it is */
-  #status .card { margin-bottom: 0.75rem; }
-  .meter { margin-bottom: 0.6rem; }
+  #status .card { margin-bottom: var(--gap); }
+  .meter + .meter { margin-top: var(--tight); }
   .meter > div { display: flex; justify-content: space-between; align-items: baseline; }
   .bar { display: block; height: 0.4rem; margin-top: 0.3rem; background: var(--bg); border-radius: var(--r); overflow: hidden; }
   .bar i { display: block; height: 100%; background: var(--accent); }
 
+  /* writing happens in a dock above the tab bar. it holds a panel of
+     fields with the send button at its bottom right, or the action button
+     that opens one, in the place of that send button */
+  #dock { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
+  #dock > * { margin-top: var(--gap); }
+  .panel { display: flex; flex-direction: column; gap: var(--tight); width: 100%; padding: var(--tight); background: var(--card); border-radius: var(--r); }
+  .panel input, .panel textarea { margin: 0; background: var(--bg); }
+  /* one grid for every panel: the same space around and between its
+     parts, and one line fields as tall as the button, so that the button
+     of chat is not centered on a taller field, off the place of the others */
+  .panel .row { margin: 0; }
+  .panel input { height: 2.5rem; }
+  .panel > .square { align-self: flex-end; }
+  /* inset like the send button of a panel, which takes its place */
+  #write { margin: var(--gap) var(--tight) var(--tight); }
+  /* its text starts where the text of the fields does, and its cross ends
+     where the send button does */
+  .title { display: flex; justify-content: space-between; align-items: center; padding-left: var(--gap); }
+  .title button { display: grid; padding: var(--tight) 0 var(--tight) var(--tight); background: none; color: var(--dim); }
+  .title svg { width: 1rem; height: 1rem; }
+  /* the status button turns red while the device cannot be reached */
+  #info.down { background: #f08a7a; color: var(--bg); }
+  /* a notification: an icon for its kind beside its two lines */
+  .note { display: grid; grid-template-columns: 1.125rem 1fr; gap: 0 var(--gap); }
+  .note svg { grid-row: span 2; width: 1.125rem; height: 1.125rem; margin-top: 0.15rem; color: var(--accent); }
+
   /* tab bar */
-  nav { display: flex; flex: none; margin: 0.5rem 0 1rem; padding: 0.3rem; border-radius: var(--r); background: var(--card); }
+  nav { display: flex; flex: none; margin: var(--gap) 0; padding: 0.3rem; border-radius: var(--r); background: var(--card); }
   nav button { flex: 1; padding: 0.55rem 0; font-size: 0.875rem; color: var(--dim); background: none; }
 
   /* onboarding: a mark, a heading with a lead line, cards, one main button */
-  #intro { position: fixed; inset: 0; z-index: 1; overflow-y: auto; padding: 1.9rem 1rem 1rem; background: var(--bg); }
+  #intro { position: fixed; inset: 0; z-index: 1; overflow-y: auto; padding: 1.9rem var(--gap) var(--gap); background: var(--bg); }
   #intro > *, #join { display: flex; flex-direction: column; gap: 1rem; max-width: 38rem; margin: 0 auto; }
   .mark { width: 3.5rem; height: 3.5rem; }
   .lead { color: var(--dim); }
-  .card { display: flex; flex-direction: column; gap: 0.6rem; background: var(--card); border-radius: var(--r); padding: 0.85rem 1rem; }
+  .card { display: flex; flex-direction: column; gap: var(--tight); background: var(--card); border-radius: var(--r); padding: var(--gap); }
   .label { color: var(--dim); font-size: 0.8125rem; letter-spacing: 0.04em; }
   /* dot, name, description. the name column is fixed so that the descriptions line up */
-  .feature { display: grid; grid-template-columns: 0.6rem 3rem 1fr; gap: 0 0.8rem; align-items: baseline; }
+  .feature { display: grid; grid-template-columns: 0.6rem 3rem 1fr; gap: 0 var(--gap); align-items: baseline; }
   .feature i, .presence i { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--dot); }
-  .presence { display: flex; align-items: center; gap: 0.6rem; }
+  .presence { display: flex; align-items: center; gap: var(--tight); }
   .presence i { flex: none; }
   .feature span { color: var(--dim); font-size: 0.875rem; }
-  .step { display: grid; grid-template-columns: 1.5rem 1fr; gap: 0 0.7rem; font-size: 0.9375rem; }
+  .step { display: grid; grid-template-columns: 1.5rem 1fr; gap: 0 var(--gap); font-size: 0.9375rem; }
   .step > b { display: grid; place-items: center; height: 1.5rem; border-radius: var(--r); background: var(--bg); color: var(--accent); font-size: 0.8125rem; }
   .chip { font-family: ui-monospace, monospace; font-size: 0.875rem; background: var(--bg); border-radius: var(--r); padding: 0.1rem 0.4rem; }
   .lead .chip { background: var(--card); }
@@ -97,6 +129,12 @@
   </symbol>
   <symbol id="chevron" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2.4"><path d="M11 3 5 9l6 6"/></symbol>
   <symbol id="ring" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M4 13V8a5 5 0 0 1 10 0v5l1.5 1.5h-13zM7.5 16h3"/></symbol>
+  <symbol id="pen" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M3 15l1-4 8-8 3 3-8 8zM10.5 4.5l3 3"/></symbol>
+  <symbol id="cross" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2.4"><path d="M4 4l10 10M14 4 4 14"/></symbol>
+  <symbol id="send" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M2.5 8.5 15.5 3l-4.5 12.5-2.5-5.5zM8.5 10l7-7"/></symbol>
+  <symbol id="reply" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M7.5 4 3 8.5 7.5 13M3 8.5h7a5 5 0 0 1 5 5v1"/></symbol>
+  <symbol id="envelope" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M2.5 4.5h13v9h-13zM2.5 5l6.5 5 6.5-5"/></symbol>
+  <symbol id="bubble" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M2.5 3.5h13v8.5H8l-3.5 3v-3h-2z"/></symbol>
   <symbol id="gauge" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2.4"><path d="M4 15V9M9 15V3M14 15v-4"/></symbol>
   <symbol id="person" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2">
     <circle cx="9" cy="6" r="3"/><path d="M3 16c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/>
@@ -151,7 +189,6 @@
     </div>
     <button class="go wide" id="saved">got it</button>
   </div>
-  <div class="status"></div>
 </div>
 
 <div id="band"></div>
@@ -163,7 +200,6 @@
     <button class="square" id="info"><svg><use href="#gauge"/></svg></button>
     <button class="square" id="who"><svg><use href="#person"/></svg></button>
   </div>
-  <div class="status"></div>
 </header>
 
 <main>
@@ -212,36 +248,18 @@
   <div id="topics"></div>
   <div id="threads" hidden>
     <div id="threadlist"></div>
-    <form class="stack" id="threadform">
-      <input id="subject" maxlength="80" placeholder="subject" autocomplete="off">
-      <textarea id="threadtext" rows="3" maxlength="2000" placeholder="start a new thread"></textarea>
-      <button class="go">post</button>
-    </form>
   </div>
   <div id="thread" hidden>
     <div id="opener"></div>
     <div id="replylist"></div>
-    <form class="row" id="replyform">
-      <textarea id="replytext" rows="1" maxlength="2000" placeholder="reply"></textarea>
-      <button class="go">reply</button>
-    </form>
   </div>
 </section>
 
 <section id="chat">
   <div id="chatlog"></div>
-  <form class="row" id="chatform">
-    <input id="chattext" maxlength="280" placeholder="message" autocomplete="off">
-    <button class="go">send</button>
-  </form>
 </section>
 
 <section id="mail">
-  <form class="stack" id="mailform">
-    <input id="mailto" maxlength="24" placeholder="to (a name, like ada or ~amber-otter)" autocomplete="off">
-    <textarea id="mailtext" rows="3" maxlength="1000" placeholder="private message"></textarea>
-    <button class="go">send</button>
-  </form>
   <div id="maillist"></div>
 </section>
 
@@ -253,6 +271,33 @@
 </section>
 </main>
 
+<div id="refusal" hidden><div class="card"><div id="refused"></div><button class="go" id="okay">okay</button></div></div>
+<div id="dock">
+  <form class="panel" id="threadform" hidden>
+    <div class="label title">new thread<button type="button" title="cancel"><svg><use href="#cross"/></svg></button></div>
+    <input id="subject" maxlength="80" placeholder="subject" autocomplete="off">
+    <textarea id="threadtext" rows="3" maxlength="2000" placeholder="start a new thread"></textarea>
+    <button class="square go" title="post"><svg><use href="#send"/></svg></button>
+  </form>
+  <form class="panel" id="replyform" hidden>
+    <div class="label title">reply<button type="button" title="cancel"><svg><use href="#cross"/></svg></button></div>
+    <textarea id="replytext" rows="2" maxlength="2000" placeholder="reply"></textarea>
+    <button class="square go" title="reply"><svg><use href="#send"/></svg></button>
+  </form>
+  <form class="panel" id="mailform" hidden>
+    <div class="label title">new mail<button type="button" title="cancel"><svg><use href="#cross"/></svg></button></div>
+    <input id="mailto" maxlength="24" placeholder="to (a name, like ada or ~amber-otter)" autocomplete="off">
+    <textarea id="mailtext" rows="3" maxlength="1000" placeholder="private message"></textarea>
+    <button class="square go" title="send"><svg><use href="#send"/></svg></button>
+  </form>
+  <form class="panel" id="chatform" hidden>
+    <div class="row">
+      <input id="chattext" maxlength="280" placeholder="message" autocomplete="off">
+      <button class="square go" title="send"><svg><use href="#send"/></svg></button>
+    </div>
+  </form>
+  <button class="square go" id="write" title="write" hidden><svg><use href="#pen"/></svg></button>
+</div>
 <nav>
   <button data-tab="board">board</button>
   <button data-tab="chat">chat</button>
@@ -292,15 +337,21 @@ let session = localStorage.session || '';
 // names of the views that the header announces
 const PLACES = { status: 'status', notes: 'notifications' };
 
-// shown in the header and in the onboarding overlay, whichever is visible
-const status = text => document.querySelectorAll('.status').forEach(node => { node.textContent = text; });
+// tells the user what went wrong, in a dialog that stays until dismissed
+function refuse(text) {
+  $('refused').textContent = text;
+  $('refusal').hidden = false;
+  $('okay').focus();
+}
 const now = () => Math.floor(Date.now() / 1000);
 const when = ts => ts ? new Date(ts * 1000).toLocaleString() : '';
 
 async function request(method, path, params = {}) {
   const body = new URLSearchParams({ now: now(), ...(session && { session }), ...params });
   const url = method === 'GET' ? `${path}?${body}` : path;
-  const res = await fetch(url, method === 'GET' ? {} : { method, body });
+  // an unreachable device fails without a message: the red status button
+  // already says so
+  const res = await fetch(url, method === 'GET' ? {} : { method, body }).catch(() => { throw new Error(''); });
   if (!res.ok) throw new Error(await res.text());
   return res;
 }
@@ -343,8 +394,8 @@ function parsePage(buffer) {
   return { older, pinned, entries: parseRecords(view, offset, first).filter(entry => !deleted.includes(entry.id)) };
 }
 
-// runs an action and reports its failure in the status line
-const attempt = action => action().then(() => status(''), err => status(err.message));
+// runs an action and reports its failure to the user
+const attempt = action => action().catch(err => { if (err.message) refuse(err.message); });
 
 function action(label, run) {
   const button = document.createElement('button');
@@ -500,9 +551,12 @@ function showPlace() {
 // to them last. both live in this browser, so they do not follow an account
 // to another device.
 
-const MAX_INVOLVED = 50;
-const recall = name => JSON.parse(localStorage[name] || '{}');
-const involved = recall('involved'), notes = recall('notes');
+const MAX_INVOLVED = 50, MAX_NOTES = 50;
+const recall = (name, empty) => JSON.parse(localStorage[name] || empty);
+const involved = recall('involved', '{}');
+// one note per reply by someone else: [thread key, who replied, how the
+// reply starts]
+let notes = recall('replied', '[]');
 let cursor = localStorage.events === undefined ? null : +localStorage.events;
 // replies we wrote during this visit, which must not ring our own bell
 const own = new Set();
@@ -514,29 +568,41 @@ function involve(key, subject) {
   localStorage.involved = JSON.stringify(involved);
 }
 
-function forget(key) {
-  delete notes[key];
-  localStorage.notes = JSON.stringify(notes);
+function keepNotes(kept) {
+  notes = kept.slice(-MAX_NOTES);
+  localStorage.replied = JSON.stringify(notes);
   showNotes();
 }
 
-// replies by others to threads we take part in become notes
+// opening a thread clears the notes about it
+const forget = key => keepNotes(notes.filter(([noted]) => noted !== key));
+
+// every reply by someone else to a thread we take part in becomes a note
 function noteReplies({ events, replies }) {
-  replies.forEach(reply => {
-    const key = `${reply.topic}/${reply.thread}`;
-    if (key in involved && !own.has(`${reply.topic}/${reply.reply}`)) notes[key] = reply.name;
-  });
+  const news = replies.filter(reply => !own.has(`${reply.topic}/${reply.reply}`))
+    .map(reply => [`${reply.topic}/${reply.thread}`, reply.name, reply.text]).filter(([key]) => key in involved);
   cursor = localStorage.events = events;
-  localStorage.notes = JSON.stringify(notes);
-  showNotes();
+  keepNotes([...notes, ...news]);
 }
 
+// one row per unread mail and per reply, newest first: what happened, and
+// below it how the message starts. the device announces the newest unread
+// mail and counts the rest
 function showNotes() {
-  const mail = me.mail && card(`${me.mail} new mail`, '', () => show('mail'));
-  const replied = Object.entries(notes).map(([key, name]) =>
-    card(involved[key] || key, `${name} replied`, () => show(`board/${key}`)));
-  $('bell').classList.toggle('on', !!(mail || replied.length));
-  $('notelist').replaceChildren(...[mail, ...replied].filter(Boolean));
+  const unread = me.unread || [], uncounted = (me.mail || 0) - unread.length;
+  const note = (icon, title, detail, path) => {
+    const node = card(title, detail, () => show(path));
+    node.classList.add('note');
+    node.insertAdjacentHTML('afterbegin', `<svg><use href="#${icon}"/></svg>`);
+    return node;
+  };
+  const mail = unread.map(({ from, text }) => note('envelope', `mail from ${from}`, text, 'mail'));
+  const more = uncounted > 0 && note('envelope', `${uncounted} more new mail`, 'open your mail to read it', 'mail');
+  const replied = notes.map(([key, name, text]) =>
+    note('bubble', `${name} replied in ${involved[key] || key}`, text || '', `board/${key}`));
+  const rows = [...replied.reverse(), more, ...mail.reverse()].filter(Boolean);
+  $('bell').classList.toggle('on', rows.length > 0);
+  $('notelist').replaceChildren(...rows);
 }
 
 // --- status ---
@@ -567,7 +633,7 @@ async function loadStatus() {
     const row = document.createElement('div');
     row.className = 'presence';
     row.style.setProperty('--dot', app ? IN_APP : ON_WIFI);
-    row.append(document.createElement('i'), nameNode(name), app ? '' : ' on the wifi, not in the oasis');
+    row.append(document.createElement('i'), nameNode(name));
     return row;
   }));
   $('stored').replaceChildren(...state.stored.map(row => meter(row.name,
@@ -577,6 +643,7 @@ async function loadStatus() {
 
 function showBoard() {
   showPlace();
+  showWriting();
   $('topics').hidden = !!topic;
   $('threads').hidden = !topic || !!thread;
   $('thread').hidden = !thread;
@@ -588,17 +655,20 @@ function showBoard() {
 // sent and 0 for mail we received
 function mailEntry(entry) {
   const sent = entry.ref === 1, other = entry.name;
-  const reply = !sent && action('reply', () => {
-    $('mailto').value = other;
-    $('mailtext').focus();
-  });
-  return entryNode(entry, sent ? 'to ' : 'from ', reply);
+  const node = entryNode(entry, sent ? 'to ' : 'from ');
+  if (sent) return node;
+  const reply = action('', () => writeMail(other));
+  reply.title = 'reply';
+  reply.className = 'square go';
+  reply.innerHTML = '<svg><use href="#reply"/></svg>';
+  node.append(reply);
+  return node;
 }
 // reading the mailbox marks its mail as read on the device. the count is
 // cleared here right away instead of waiting for the next poll to say so
 async function loadMail() {
   await loadLog('/api/mail', {}, $('maillist'), mailEntry);
-  showAccount({ ...me, mail: 0 });
+  showAccount({ ...me, mail: 0, unread: [] });
   showNotes();
 }
 
@@ -607,7 +677,32 @@ function writeMail(name) {
   showIntro();
   show('mail');
   $('mailto').value = name;
-  $('mailtext').focus();
+  openForm('mailform');
+}
+
+// --- writing ---
+// the forms for a new thread, a reply, and a mail stay closed until the
+// action button, or a reply button, opens the one that fits the place.
+
+const FORMS = ['mailform', 'threadform', 'replyform'];
+let writing = null;
+
+// the form that the current place writes with, if any
+const formHere = () => tab === 'mail' ? 'mailform' : tab !== 'board' || !topic ? null : thread ? 'replyform' : 'threadform';
+
+// fills the dock: the chat panel on its tab, else the open form, else the
+// action button where there is something to write
+function showWriting() {
+  const open = writing && writing === formHere();
+  $('write').hidden = open || !formHere();
+  $('chatform').hidden = tab !== 'chat';
+  FORMS.forEach(id => { $(id).hidden = !open || id !== writing; });
+}
+
+function openForm(id) {
+  writing = id;
+  showWriting();
+  if (id) [...$(id).elements].find(field => field.type !== 'button' && !field.value)?.focus();
 }
 
 function showAccount(state) {
@@ -845,6 +940,7 @@ async function findThread(id) {
 // draws the place named by the address.
 async function route() {
   const [view, topicId, threadId] = location.hash.slice(1).split('/');
+  writing = null;
   if (view === 'admin') {
     // remembered for this visit, since the address moves on
     sessionStorage.admin = 1;
@@ -858,6 +954,7 @@ async function route() {
     node.classList.toggle('on', (node.dataset.tab || node.id) === tab);
   });
   showPlace();
+  showWriting();
   if (tab === 'board') showBoard();
   if (tab === 'mail') attempt(loadMail);
   if (tab === 'account') fillJoin();
@@ -883,6 +980,7 @@ onSubmit('threadform', async () => {
   const { id } = await api('POST', '/api/board', { topic, subject, text: $('threadtext').value });
   involve(`${topic}/${id}`, subject.trim());
   $('subject').value = $('threadtext').value = '';
+  openForm(null);
   await loadThreads();
 });
 onSubmit('replyform', async () => {
@@ -890,12 +988,15 @@ onSubmit('replyform', async () => {
   own.add(`${topic}/${id}`);
   involve(`${topic}/${thread.id}`, thread.subject);
   $('replytext').value = '';
+  openForm(null);
   await loadThread();
 });
 $('saved').onclick = () => { localStorage.saved = 1; showIntro(); };
 $('who').onclick = openJoin;
 $('info').onclick = () => tab === 'status' ? goBack() : show('status');
-$('bell').onclick = () => tab === 'notes' ? goBack() : show('notes');
+$('write').onclick = () => openForm(formHere());
+document.querySelectorAll('.title button').forEach(cross => { cross.onclick = () => openForm(null); });
+$('bell').onclick =() => tab === 'notes' ? goBack() : show('notes');
 onSubmit('join', () => authenticate(me.registered ? '/api/profile' : '/api/register'));
 $('login').onclick = () => attempt(() => authenticate('/api/login'));
 $('logout').onclick = () => { session = localStorage.session = ''; closeJoin(); attempt(poll); };
@@ -910,8 +1011,10 @@ onSubmit('chatform', async () => {
 onSubmit('mailform', async () => {
   await api('POST', '/api/mail', { to: $('mailto').value, text: $('mailtext').value });
   $('mailtext').value = '';
+  openForm(null);
   await loadMail();
 });
+$('okay').onclick = () => { $('refusal').hidden = true; };
 $('file').onchange = () => {
   const file = $('file').files[0];
   $('file').value = '';
@@ -919,7 +1022,9 @@ $('file').onchange = () => {
 };
 route();
 (async function loop() {
-  await poll().catch(() => status('reconnecting'));
+  // the status button turns red while the device does not answer
+  const down = await poll().then(() => false, () => true);
+  $('info').classList.toggle('down', down);
   setTimeout(loop, POLL_MS);
 })();
 </script>

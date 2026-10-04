@@ -1,16 +1,20 @@
 //! platform independent portal: captive dns, http server, ephemeral chat,
 //! persistent message logs, and peer signaling. uses only std so that the
-//! same code runs on the ESP32 and on a development host.
+//! same code runs on every device and on a development host. dhcp and mdns
+//! are here for the platforms that do not bring their own.
 
 pub mod board;
 pub mod chat;
 pub mod crypto;
+pub mod dhcp;
 pub mod dns;
 pub mod events;
 pub mod http;
 pub mod mail;
+pub mod mdns;
 pub mod peers;
 mod routes;
+pub mod sni;
 pub mod store;
 pub mod text;
 pub mod users;
@@ -88,6 +92,14 @@ pub struct Config {
     /// storage shared evenly between the board topics
     pub board_bytes: u64,
     pub segment_bytes: u64,
+    /// keeps an index of the replies by thread. worth its RAM once the
+    /// reply log is too large to scan for the replies of one thread.
+    pub index_replies: bool,
+    /// the oldest account makes room for one more than this
+    pub max_users: usize,
+    /// the mailbox unused for longest makes room for one more than this
+    pub max_mailboxes: usize,
+    pub mailbox_bytes: u64,
     /// minimum time between posts from one address
     pub chat_interval: Duration,
     pub board_interval: Duration,
@@ -132,7 +144,7 @@ impl Portal {
         let share = config.board_bytes / TOPICS.len() as u64;
         let open = |topic: &'static str| {
             let dir = config.data_dir.join(TOPICS_DIR);
-            let opened = Topic::open(&dir, topic, share, config.segment_bytes)?;
+            let opened = Topic::open(&dir, topic, share, config.segment_bytes, config.index_replies)?;
             Ok((topic, Mutex::new(opened)))
         };
         let topics = TOPICS.into_iter().map(open).collect::<io::Result<Vec<_>>>()?;
@@ -141,8 +153,12 @@ impl Portal {
             boot_unix: Mutex::default(),
             chat: Mutex::new(Chat::new(CHAT_CAPACITY)),
             peers: Mutex::default(),
-            users: Mutex::new(Users::open(&config.data_dir)?),
-            mail: Mutex::new(Mail::open(config.data_dir.join(MAIL_DIR))),
+            users: Mutex::new(Users::open(&config.data_dir, config.max_users)?),
+            mail: Mutex::new(Mail::open(
+                config.data_dir.join(MAIL_DIR),
+                config.max_mailboxes,
+                config.mailbox_bytes,
+            )),
             guests: Mutex::default(),
             events: Mutex::default(),
             topics,

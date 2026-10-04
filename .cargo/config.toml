@@ -1,0 +1,4 @@
+# the raspberry pi build links a static binary with the linker that ships
+# with rust, so that no cross toolchain is needed
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"

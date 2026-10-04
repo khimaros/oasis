@@ -1,7 +1,7 @@
 # pinned build toolchain. `make setup` installs everything listed here.
 
 [tools]
-rust = "1.97.0"
+rust = { version = "1.97.0", targets = "aarch64-unknown-linux-musl" }
 python = "3.14.7"
 ruff = "0.16.10"
 node = "25.9.0"

@@ -2,9 +2,11 @@
 //! newer than the last one they saw and decide for themselves which concern
 //! them, so the device does not track who takes part in which thread.
 
+use crate::text::excerpt;
 use std::collections::VecDeque;
 
 pub const MAX_EVENTS: usize = 64;
+const EXCERPT_BYTES: usize = 48;
 
 pub struct Reply {
     pub id: u64,
@@ -14,6 +16,8 @@ pub struct Reply {
     pub reply: u64,
     /// who replied
     pub name: String,
+    /// how the reply starts
+    pub excerpt: String,
 }
 
 #[derive(Default)]
@@ -23,13 +27,13 @@ pub struct Events {
 }
 
 impl Events {
-    pub fn push(&mut self, topic: &str, thread: u64, reply: u64, name: &str) {
+    pub fn push(&mut self, topic: &str, thread: u64, reply: u64, name: &str, text: &str) {
         if self.replies.len() == MAX_EVENTS {
             self.replies.pop_front();
         }
         self.last += 1;
-        let (id, topic, name) = (self.last, topic.into(), name.into());
-        self.replies.push_back(Reply { id, topic, thread, reply, name });
+        let (id, topic, name, excerpt) = (self.last, topic.into(), name.into(), excerpt(text, EXCERPT_BYTES));
+        self.replies.push_back(Reply { id, topic, thread, reply, name, excerpt });
     }
 
     /// id of the newest announcement, zero when there was none yet.

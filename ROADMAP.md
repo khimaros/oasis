@@ -1,13 +1,8 @@
 # ROADMAP
 
 ```
-[ ] profile: button to send mail
-[ ] notifications: show new mail
-[ ] notifications: show thread replies
-[ ] status: memory stats and online users
-[ ] status: dhcp users vs. web users
+[@] hardware: support for rpi4
 
-[>] hardware: support for rpi4 direct firmware implementation
 [>] board: show how many threads in a category
 [>] board: show how many messages in a thread
 [>] board: voting for threads and replies
@@ -16,6 +11,11 @@
 [>] post to a person's profile "wall"
 [>] chat: some kind of p2p message synchronization for extended history?
 
+[x] profile: button to send mail
+[x] notifications: show new mail
+[x] notifications: show thread replies
+[x] status: memory stats and online users
+[x] status: dhcp users vs. web users
 [x] mail: send/receive direct messages
 [x] open hotspot ("OASIS")
 [x] captive portal to landing page on connect

@@ -56,6 +56,10 @@ const MOUNT_POINT: &str = "/data";
 const BOARD_BYTES: u64 = 1200 * 1000;
 /// two 4096 byte littlefs blocks, minus the block pointers
 const SEGMENT_BYTES: u64 = 8000;
+const MAX_USERS: usize = 100;
+/// a full mailbox is two littlefs blocks, 100 of them 800KB
+const MAX_MAILBOXES: usize = 100;
+const MAILBOX_BYTES: u64 = 8000;
 
 const HTTP_WORKERS: usize = 4;
 const HTTP_STACK: usize = 12 * 1024;
@@ -153,6 +157,10 @@ fn config() -> Config {
         worker_stack: HTTP_STACK,
         board_bytes: BOARD_BYTES,
         segment_bytes: SEGMENT_BYTES,
+        index_replies: false,
+        max_users: MAX_USERS,
+        max_mailboxes: MAX_MAILBOXES,
+        mailbox_bytes: MAILBOX_BYTES,
         chat_interval: Duration::from_secs(1),
         board_interval: Duration::from_secs(10),
     }
@@ -166,12 +174,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     space::measure_firmware();
     let storage = mount_storage()?;
     log::info!("storage: {:?}", storage.info()?);
-    let portal = Arc::new(Portal::new(config())?);
+    let config = config();
+    let names = config.aliases.clone();
+    let portal = Arc::new(Portal::new(config)?);
     let dns_socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DNS_PORT))?;
     thread::Builder::new().stack_size(DNS_STACK).spawn(move || dns::serve(dns_socket, AP_IP))?;
     let https_listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, HTTPS_PORT))?;
     let https = thread::Builder::new().stack_size(HTTPS_STACK);
-    https.spawn(move || https::serve(https_listener, format!("http://{AP_IP}/")))?;
+    https.spawn(move || https::serve(https_listener, format!("http://{AP_IP}/"), names))?;
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, HTTP_PORT))?;
     let free_heap = unsafe { esp_idf_svc::sys::esp_get_free_heap_size() };
     log::info!("oasis \"{SSID}\" serving http://{AP_IP}/ with {free_heap} bytes of heap free");

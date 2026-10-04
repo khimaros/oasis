@@ -3,7 +3,7 @@ name = "oasis-firmware"
 description = "oasis portal firmware for the ESP32"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "GPLv3"
 
 # built with the xtensa toolchain, apart from the host workspace
 [workspace]

@@ -7,6 +7,11 @@ over its own wifi hotspot.
 
 - R1: target the classic ESP32 (ESP32-D0WD-V3, 4MB flash, no PSRAM assumed)
 - R2: single app slot, no OTA updates, to maximize user data storage
+- R30: a second target, the raspberry pi 4 model B, with the same
+  functionality. oasis is the only program on the device: a minimal linux
+  kernel boots straight into it
+- R31: on the raspberry pi the data lives on the sd card, and the limits on
+  what is stored grow with the card
 
 ## network
 
@@ -42,6 +47,19 @@ over its own wifi hotspot.
   each partition
 - R25: a notification button for incoming mail and for replies to threads
   the visitor takes part in
+- R27: one notification per mail and per reply, each on two lines (what
+  happened, and how the message starts) with a small icon for its kind.
+  mail notifications say who the mail is from
+- R28: writing happens behind an action button: the forms for a new mail,
+  a new thread, and a reply stay closed until it, or a reply button, opens
+  them. the reply button on a mail is a filled button. an open form is a
+  panel docked above the tab bar, with a title, a cross at its top right
+  that cancels, and a send icon at its bottom right, where the action
+  button was. chat has the same panel, always open, with the same icon
+- R29: a lost connection to the device is shown by the status button
+  turning red, not by text in the page
+- R32: what the device refuses is shown in a small dialog with an okay
+  button, not in a line of text that stays
 - R26: every name shown is a link to that person's profile page, which has
   a button to send them mail
 - R23: navigation goes through the address (url hash), so that the

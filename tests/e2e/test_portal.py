@@ -7,6 +7,7 @@ import os
 import pathlib
 import re
 import socket
+import ssl
 import struct
 import subprocess
 import tempfile
@@ -24,6 +25,8 @@ LOCAL, ADA, BOB = "127.0.0.1", "127.0.0.2", "127.0.0.3"
 TOPICS = ["general", "events", "marketplace", "lost", "intros"]
 MAX_PINS = 8
 MAX_EVENTS = 64
+MAX_UNREAD_NAMES = 8
+EXCERPT_BYTES = 48
 DNS_IP = "192.168.71.1"
 STARTUP_SECS = 5
 CLIENT_TIME = 1_800_000_000
@@ -33,9 +36,16 @@ MAX_MAILBOXES = 100
 # length, timestamp, reference, name length
 RECORD_HEAD = struct.Struct("<HIIB")
 MAILBOX_BYTES = 8000
+# reference and segment of a reply index entry
+INDEX_ENTRY_BYTES = 8
 PASSWORD = "hunter22"
 PBKDF2_ROUNDS = 1000
 TYPE_A, TYPE_AAAA = 1, 28
+DHCP_MAGIC = bytes([99, 130, 83, 99])
+DHCP_XID = 0x5EED1234
+# number of the option that holds the message type, and its values
+DHCP_TYPE = 53
+DHCP_DISCOVER, DHCP_OFFER, DHCP_REQUEST, DHCP_ACK, DHCP_NAK, DHCP_RELEASE = 1, 2, 3, 5, 6, 7
 
 
 def free_port(kind):
@@ -402,6 +412,145 @@ class CaptiveTest(PortalTest):
         self.assertEqual((flags & 0x000F, questions, answers), (0, 1, 0))
 
 
+def dhcp_message(kind, mac, ciaddr="0.0.0.0", **options):
+    """a client message: the fixed bootp part, then options by number."""
+    head = struct.pack(">BBBBIHH4s12x6s10x192x", 1, 1, 6, 0, DHCP_XID, 0, 0, socket.inet_aton(ciaddr), mac)
+    encoded = {DHCP_TYPE: bytes([kind]), **{int(code[1:]): value for code, value in options.items()}}
+    packed = b"".join(bytes([code, len(value)]) + value for code, value in encoded.items())
+    return head + DHCP_MAGIC + packed + b"\xff"
+
+
+def parse_dhcp(reply):
+    """(message type, offered address, options by number) of a server reply."""
+    op, xid = struct.unpack_from(">B3xI", reply)
+    assert (op, xid, reply[236:240]) == (2, DHCP_XID, DHCP_MAGIC), reply[:240]
+    options, offset = {}, 240
+    while reply[offset] != 0xFF:
+        code, length = reply[offset], reply[offset + 1]
+        options[code] = reply[offset + 2 : offset + 2 + length]
+        offset += 2 + length
+    return options[DHCP_TYPE][0], socket.inet_ntoa(reply[16:20]), options
+
+
+class DhcpTest(PortalTest):
+    """the dhcp server of devices whose platform has none. it hands out the
+    addresses .2 to .4 here, and names the portal as router and dns."""
+
+    MACS: typing.ClassVar = [bytes([2, 0, 0, 0, 0, index]) for index in range(4)]
+    POOL: typing.ClassVar = ["192.168.71.2", "192.168.71.3", "192.168.71.4"]
+    LEASE_SECS = 1
+
+    def setUp(self):
+        self.port = free_port(socket.SOCK_DGRAM)
+        self.ENV = {
+            "OASIS_DHCP_ADDR": f"127.0.0.1:{self.port}",
+            "OASIS_DHCP_FIRST": "2",
+            "OASIS_DHCP_LAST": "4",
+            "OASIS_DHCP_LEASE_SECS": str(self.LEASE_SECS),
+        }
+        super().setUp()
+
+    def ask(self, kind, mac, **options):
+        """the parsed reply to a client message, None when there is none."""
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.3)
+            sock.sendto(dhcp_message(kind, mac, **options), ("127.0.0.1", self.port))
+            try:
+                return parse_dhcp(sock.recv(1024))
+            except TimeoutError:
+                return None
+
+    def join(self, mac):
+        """discovers and requests like a client. returns its address."""
+        kind, address, options = self.ask(DHCP_DISCOVER, mac)
+        self.assertEqual(kind, DHCP_OFFER)
+        request = {"o50": socket.inet_aton(address), "o54": options[54]}
+        self.assertEqual(self.ask(DHCP_REQUEST, mac, **request)[:2], (DHCP_ACK, address))
+        return address
+
+    def test_clients_are_offered_an_address_with_the_portal_as_router_and_dns(self):
+        kind, address, options = self.ask(DHCP_DISCOVER, self.MACS[0])
+        self.assertEqual((kind, address), (DHCP_OFFER, self.POOL[0]))
+        portal = socket.inet_aton(DNS_IP)
+        self.assertEqual((options[3], options[6], options[54]), (portal, portal, portal))
+        self.assertEqual(options[1], socket.inet_aton("255.255.255.0"))
+        self.assertEqual(struct.unpack(">I", options[51]), (self.LEASE_SECS,))
+
+    def test_every_client_gets_its_own_address_and_keeps_it(self):
+        first, second = self.join(self.MACS[0]), self.join(self.MACS[1])
+        self.assertNotEqual(first, second)
+        self.assertEqual(self.join(self.MACS[0]), first)
+        renewed = self.ask(DHCP_REQUEST, self.MACS[0], ciaddr=first)
+        self.assertEqual(renewed[:2], (DHCP_ACK, first), "renewal names the address in ciaddr")
+
+    def test_an_address_that_cannot_be_had_is_refused(self):
+        taken = self.join(self.MACS[0])
+        for wanted in (taken, "192.168.71.200", "10.1.2.3"):
+            reply = self.ask(DHCP_REQUEST, self.MACS[1], o50=socket.inet_aton(wanted))
+            self.assertEqual(reply[0], DHCP_NAK, wanted)
+
+    def test_requests_meant_for_another_server_are_ignored(self):
+        other = {"o50": socket.inet_aton(self.POOL[0]), "o54": socket.inet_aton("192.168.71.9")}
+        self.assertIsNone(self.ask(DHCP_REQUEST, self.MACS[0], **other))
+
+    def test_the_pool_is_bounded_and_expired_leases_are_handed_out_again(self):
+        self.assertEqual([self.join(mac) for mac in self.MACS[:3]], self.POOL)
+        self.assertIsNone(self.ask(DHCP_DISCOVER, self.MACS[3]))
+        time.sleep(self.LEASE_SECS + 0.2)
+        self.assertIn(self.join(self.MACS[3]), self.POOL)
+
+    def test_a_released_address_is_free_again(self):
+        address = self.join(self.MACS[0])
+        self.assertIsNone(self.ask(DHCP_RELEASE, self.MACS[0], ciaddr=address))
+        self.assertEqual(self.join(self.MACS[1]), address)
+
+    def test_malformed_messages_are_ignored(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            for junk in (b"", b"\x01" * 100, dhcp_message(DHCP_DISCOVER, self.MACS[0])[:-20] + b"\x35\x50"):
+                sock.sendto(junk, ("127.0.0.1", self.port))
+        self.assertEqual(self.join(self.MACS[0]), self.POOL[0])
+
+
+class MdnsTest(PortalTest):
+    """the responder for the portal's `.local` name, on devices whose
+    platform has none. queries from a port other than 5353 are answered
+    directly, which is how these tests reach it."""
+
+    def setUp(self):
+        self.port = free_port(socket.SOCK_DGRAM)
+        self.ENV = {"OASIS_MDNS_ADDR": f"127.0.0.1:{self.port}"}
+        super().setUp()
+
+    def ask(self, query):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.3)
+            sock.sendto(query, ("127.0.0.1", self.port))
+            try:
+                return sock.recv(512)
+            except TimeoutError:
+                return None
+
+    def test_the_portal_answers_for_its_local_name(self):
+        for name in (ALIAS, ALIAS.upper()):
+            query = dns_query(name, TYPE_A)
+            reply = self.ask(query)
+            query_id, flags, questions, answers = struct.unpack(">HHHH", reply[:8])
+            self.assertEqual((query_id, questions, answers), (0x1234, 1, 1))
+            self.assertEqual(flags & 0x8400, 0x8400, "an authoritative response")
+            self.assertEqual(reply[12 : len(query)], query[12:], "the question is repeated")
+            self.assertEqual(socket.inet_ntoa(reply[-4:]), DNS_IP)
+
+    def test_the_name_is_found_among_several_questions(self):
+        first = dns_query("printer.local", TYPE_A)
+        query = first[:4] + struct.pack(">H", 2) + first[6:] + dns_query(ALIAS, TYPE_A)[12:]
+        self.assertEqual(socket.inet_ntoa(self.ask(query)[-4:]), DNS_IP)
+
+    def test_other_names_and_types_get_no_answer(self):
+        for name, qtype in (("printer.local", TYPE_A), ("oasis.lan", TYPE_A), (ALIAS, TYPE_AAAA)):
+            self.assertIsNone(self.ask(dns_query(name, qtype)), name)
+        self.assertIsNone(self.ask(b"\x00" * 5))
+
+
 class ChatTest(PortalTest):
     def test_messages_are_delivered_once(self):
         self.assertEqual(self.server.get("/api/poll")["chat"], [])
@@ -598,6 +747,38 @@ class MailTest(PortalTest):
         self.inbox(BOB)
         self.assertEqual(self.server.get("/api/poll", source=BOB)["mail"], 0)
 
+    def test_unread_mail_names_its_senders(self):
+        guest = self.server.get("/api/poll", source="127.0.3.1")["name"]
+        self.mail(ADA, to="bob", text="one")
+        self.mail("127.0.3.1", to="bob", text="two")
+        self.mail(ADA, to="bob", text="three")
+        expected = [
+            {"from": "ada", "text": "one"},
+            {"from": guest, "text": "two"},
+            {"from": "ada", "text": "three"},
+        ]
+        self.assertEqual(self.server.get("/api/poll", source=BOB)["unread"], expected)
+        self.assertEqual(self.server.get("/api/poll", source=ADA)["unread"], [])
+        self.inbox(BOB)
+        self.assertEqual(self.server.get("/api/poll", source=BOB)["unread"], [])
+
+    def test_the_list_of_unread_senders_is_bounded(self):
+        for index in range(MAX_UNREAD_NAMES + 4):
+            self.mail(ADA, to="bob", text=f"mail {index}")
+        state = self.server.get("/api/poll", source=BOB)
+        self.assertEqual(state["mail"], MAX_UNREAD_NAMES + 4, "every mail is counted")
+        newest = [f"mail {index}" for index in range(4, MAX_UNREAD_NAMES + 4)]
+        self.assertEqual([notice["text"] for notice in state["unread"]], newest, "the newest are announced")
+
+    def test_announcements_carry_a_short_one_line_excerpt(self):
+        long = "the well by the gate\nis fixed again and the water is clean, bring your bottles"
+        self.mail(ADA, to="bob", text=long)
+        (notice,) = self.server.get("/api/poll", source=BOB)["unread"]
+        self.assertEqual(notice["text"], long.replace("\n", " ")[:EXCERPT_BYTES] + "...")
+        thread = self.server.thread()[1]["id"]
+        self.server.reply(thread, long)
+        self.assertEqual(self.server.get("/api/poll", events=0)["replies"][0]["text"], notice["text"])
+
     def test_invalid_mail_is_rejected(self):
         self.assertEqual(self.mail(ADA, to="nobody", text="hi"), 404)
         self.assertEqual(self.mail(ADA, to="~nobody-here", text="hi"), 404)
@@ -735,8 +916,22 @@ class NotificationTest(PortalTest):
         state = self.server.get("/api/poll", events=0)
         self.assertEqual(state["events"], 2)
         expected = [
-            {"id": 1, "topic": "general", "thread": thread, "reply": first_reply, "name": "ada"},
-            {"id": 2, "topic": "general", "thread": thread, "reply": first_reply + 1, "name": guest},
+            {
+                "id": 1,
+                "topic": "general",
+                "thread": thread,
+                "reply": first_reply,
+                "name": "ada",
+                "text": "one",
+            },
+            {
+                "id": 2,
+                "topic": "general",
+                "thread": thread,
+                "reply": first_reply + 1,
+                "name": guest,
+                "text": "two",
+            },
         ]
         self.assertEqual(state["replies"], expected)
         self.assertEqual(self.server.get("/api/poll", events=1)["replies"], expected[1:])
@@ -759,6 +954,70 @@ class NotificationTest(PortalTest):
         header = body[body.index("<header") : body.index("</header>")]
         self.assertLess(header.index('id="bell"'), header.index('id="info"'))
         self.assertIn('<section id="notes">', body)
+
+
+def client_hello(server_name):
+    """the first message of a real tls client, asking for `server_name`, or
+    for none, as a client does that connects to an ip address."""
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    tls = context.wrap_bio(incoming, outgoing, server_hostname=server_name)
+    try:
+        tls.do_handshake()
+    except ssl.SSLWantReadError:
+        pass
+    return outgoing.read()
+
+
+class HttpsFilterTest(PortalTest):
+    """the https listener must only present its untrusted certificate to
+    clients that ask for the portal. a handshake is expensive on the device
+    and wasted on clients that want another host. the host build has no tls, so
+    its listener says `tls` where the device would start the handshake."""
+
+    def setUp(self):
+        self.port = free_port(socket.SOCK_STREAM)
+        self.ENV = {"OASIS_HTTPS_ADDR": f"127.0.0.1:{self.port}"}
+        super().setUp()
+
+    def answer(self, *chunks):
+        """what the listener says to `chunks`. empty when it hangs up, which
+        shows as a reset since it never read them."""
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+            try:
+                for chunk in chunks:
+                    sock.sendall(chunk)
+                    time.sleep(0.05)
+                return sock.recv(16)
+            except ConnectionError:
+                return b""
+
+    def test_clients_asking_for_the_portal_are_answered(self):
+        self.assertEqual(self.answer(client_hello(None)), b"tls", "no name, as for https://10.0.0.1")
+        self.assertEqual(self.answer(client_hello(ALIAS)), b"tls")
+        self.assertEqual(self.answer(client_hello(ALIAS.upper())), b"tls")
+
+    def test_clients_asking_for_other_hosts_are_hung_up_on(self):
+        for name in ("connectivitycheck.grapheneos.network", "www.google.com", "oasis.local.example.com"):
+            self.assertEqual(self.answer(client_hello(name)), b"", name)
+
+    def test_a_hello_arriving_in_pieces_is_understood(self):
+        hello = client_hello(ALIAS)
+        self.assertEqual(self.answer(hello[:7], hello[7:200], hello[200:]), b"tls")
+        other = client_hello("example.com")
+        self.assertEqual(self.answer(other[:7], other[7:200], other[200:]), b"")
+
+    def test_a_hello_seen_only_in_part_is_answered_unless_it_names_another_host(self):
+        """the device can only look at the first packet of a hello, and the
+        hello of a browser spans two. the name may be in the part it cannot
+        see, so only a name that was seen counts against the client."""
+        self.assertEqual(self.answer(client_hello(None)[:-20]), b"tls")
+        self.assertEqual(self.answer(client_hello("example.com")[:-20]), b"")
+
+    def test_anything_but_tls_is_hung_up_on(self):
+        self.assertEqual(self.answer(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"), b"")
+        self.assertEqual(self.answer(b"\x16\x03\x01\xff\xff" + b"\0" * 64), b"", "an absurd length")
 
 
 class RateLimitTest(PortalTest):
@@ -897,7 +1156,7 @@ class LongThreadTest(PortalTest):
     def test_long_threads_are_read_in_pages(self):
         self.server.thread("busy")
         self.server.thread("quiet")
-        busy, quiet = self.server.threads()["threads"]
+        busy, quiet = self.server.threads()["threads"][-2:]
         posted = [f"reply {index:03} {'x' * 100}" for index in range(250)]
         for index, text in enumerate(posted):
             self.server.reply(busy["id"], text)
@@ -907,6 +1166,112 @@ class LongThreadTest(PortalTest):
         self.assertEqual([text for _, text in replies], posted)
         self.assertGreater(requests, 1, "a long thread takes several requests")
         self.assertEqual(len(self.server.replies(quiet)[0]), 5)
+
+
+class IndexedThreadTest(LongThreadTest):
+    """devices with a large reply log keep an index of the segments that
+    hold the replies of each thread, so that reading a thread does not read
+    the whole log."""
+
+    ENV: typing.ClassVar = {"OASIS_INDEX_REPLIES": "1"}
+
+    def setUp(self):
+        super().setUp()
+        self.index = self.data_dir / "topics" / "general.r.index"
+        self.server.thread("indexed")
+        (self.thread,) = self.server.threads()["threads"]
+        self.posted = ["one", "two", "three"]
+        for text in self.posted:
+            self.server.reply(self.thread["id"], text)
+
+    def texts(self):
+        return [text for _, text in self.server.replies(self.thread)[0]]
+
+    def test_replies_are_read_through_the_index(self):
+        self.assertEqual(self.texts(), self.posted)
+        self.server.stop()
+        self.assertEqual(self.index.stat().st_size, INDEX_ENTRY_BYTES, "one segment holds the thread")
+        self.index.write_bytes(b"")
+        self.server.start()
+        self.assertEqual(self.texts(), [], "an emptied index hides the replies")
+
+    def test_index_is_built_for_a_log_that_has_none(self):
+        self.server.stop()
+        self.index.unlink()
+        self.server.start()
+        self.assertEqual(self.texts(), self.posted)
+        self.assertEqual(self.index.stat().st_size, INDEX_ENTRY_BYTES)
+
+    def test_entry_torn_by_power_loss_is_dropped(self):
+        self.server.stop()
+        with self.index.open("ab") as file:
+            file.write(b"\x07\x00\x00")
+        self.server.start()
+        self.server.thread("later")
+        later = self.server.threads()["threads"][-1]
+        self.server.reply(later["id"], "four")
+        self.assertEqual(self.texts(), self.posted)
+        self.assertEqual(self.server.replies(later)[0][0][1], "four")
+
+
+class IndexEvictionTest(PortalTest):
+    SEGMENTS = 6
+    ENV: typing.ClassVar = {
+        "OASIS_INDEX_REPLIES": "1",
+        "OASIS_SEGMENT_BYTES": "512",
+        "OASIS_BOARD_BYTES": str(4096 * len(TOPICS)),
+    }
+
+    def test_index_forgets_evicted_segments(self):
+        self.server.thread("old")
+        self.server.thread("new")
+        old, new = self.server.threads()["threads"]
+        for index in range(30):
+            self.server.reply(old["id"], f"old {index:02} {'x' * 100}")
+        posted = [f"new {index:02} {'x' * 100}" for index in range(60)]
+        for text in posted:
+            self.server.reply(new["id"], text)
+        for restarted in (False, True):
+            if restarted:
+                self.server.restart()
+            self.assertEqual(self.server.replies(old)[0], [])
+            kept = [text for _, text in self.server.replies(new)[0]]
+            self.assertEqual(kept, posted[-len(kept) :])
+            self.assertGreater(len(kept), 10)
+        index = self.data_dir / "topics" / "general.r.index"
+        self.assertLessEqual(index.stat().st_size, self.SEGMENTS * INDEX_ENTRY_BYTES)
+
+
+class ScaledLimitsTest(PortalTest):
+    """a device with more storage raises the limits on what is kept."""
+
+    USERS, MAILBOXES, MAILBOX = 3, 4, 24000
+    ENV: typing.ClassVar = {
+        "OASIS_MAX_USERS": str(USERS),
+        "OASIS_MAX_MAILBOXES": str(MAILBOXES),
+        "OASIS_MAILBOX_BYTES": str(MAILBOX),
+    }
+
+    def test_account_and_mailbox_limits_follow_the_configuration(self):
+        stored = {row["name"]: row["max"] for row in self.server.get("/api/status")["stored"]}
+        self.assertEqual((stored["accounts"], stored["mailboxes"]), (self.USERS, self.MAILBOXES))
+        for index in range(self.USERS + 1):
+            self.assertEqual(self.server.register(f"127.0.1.{index + 1}", f"user{index}"), 200)
+        self.assertEqual(self.server.login(ADA, "user0"), 403, "the oldest account made room")
+        self.assertEqual(self.server.login(ADA, "user1"), 200)
+        for index in range(self.MAILBOXES + 2):
+            self.server.post("/api/mail", source=f"127.0.4.{index + 1}", to="user1", text="hi")
+        owners = {path.name.split(".")[0] for path in self.data_dir.glob("mail/*")}
+        self.assertEqual(len(owners), self.MAILBOXES)
+
+    def test_mailbox_size_follows_the_configuration(self):
+        self.server.register(ADA, "ada")
+        self.server.register(BOB, "bob")
+        for index in range(80):
+            self.server.post("/api/mail", source=ADA, to="bob", text=f"message {index:02} {'x' * 400}")
+        stored = sum(path.stat().st_size for path in self.data_dir.glob("mail/*"))
+        self.assertGreater(stored, 2 * MAILBOX_BYTES)
+        self.assertLessEqual(stored, 2 * self.MAILBOX)
 
 
 class AdminTest(PortalTest):

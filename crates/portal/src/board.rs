@@ -37,10 +37,13 @@ pub struct Topic {
 
 impl Topic {
     /// opens the topic `name`, whose files live in `dir`.
-    pub fn open(dir: &Path, name: &str, bytes: u64, segment_bytes: u64) -> io::Result<Topic> {
+    /// `indexed` keeps an index of the replies by thread, for a reply log
+    /// too large to scan.
+    pub fn open(dir: &Path, name: &str, bytes: u64, segment_bytes: u64, indexed: bool) -> io::Result<Topic> {
         let thread_bytes = bytes / THREAD_SHARE;
         let open = |suffix, bytes| Store::open(dir, &format!("{name}{suffix}"), bytes, segment_bytes);
         let (threads, replies) = (open(THREADS, thread_bytes)?, open(REPLIES, bytes - thread_bytes)?);
+        let replies = if indexed { replies.indexed()? } else { replies };
         let pinned_file = dir.join(format!("{name}{PINNED}"));
         let stored = fs::read_to_string(&pinned_file).unwrap_or_default();
         let pinned = stored.lines().filter_map(|line| line.parse().ok()).collect();
@@ -80,7 +83,7 @@ impl Topic {
     /// replies to `thread` that come after reply `after`, each preceded by
     /// its id, and the reply to continue after when there are more.
     pub fn replies(&self, thread: u64, after: u64) -> io::Result<(Vec<u8>, Option<u64>)> {
-        self.replies.scan(after, REPLY_PAGE_BYTES, |reference| reference == thread)
+        self.replies.scan(after, REPLY_PAGE_BYTES, thread)
     }
 
     /// hides a thread, or a reply when `reply` is set.

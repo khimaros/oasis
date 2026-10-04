@@ -8,8 +8,8 @@
 ## where code goes
 
 anything that does not need hardware belongs in `crates/portal`, which must
-stay std only with zero dependencies. `firmware` only wires up wifi and
-storage. this keeps features testable on the host.
+stay std only with zero dependencies. `firmware` and `crates/rpi` only wire
+up wifi and storage. this keeps features testable on the host.
 
 ## testing
 
@@ -25,9 +25,15 @@ can shrink limits.
 transfer between two tabs. run it after every change to `index.html`. it
 needs `google-chrome` and is not part of `make test-e2e`.
 
+`make test-rpi` builds the raspberry pi image and boots it in qemu
+(`tests/rpi`). qemu emulates the board and the sd card but no network
+device, so the test follows the serial console up to the point where the
+portal serves. run it after every change to `crates/rpi` or `tools`. it
+needs `qemu-system-aarch64` and the tools of `make rpi-image`.
+
 the wifi access point, captive portal behavior of real phones, and the
 https listener are not covered by automated tests. check them on hardware with two clients after changing `index.html`,
-`peers.rs`, or `firmware`.
+`peers.rs`, `firmware`, or `crates/rpi`.
 
 ## ESP-IDF components
 

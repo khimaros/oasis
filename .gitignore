@@ -1,5 +1,6 @@
 target/
 .embuild/
+.cache/
 .esp-env.sh
 firmware/tls/
 data/

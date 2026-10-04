@@ -3,11 +3,11 @@
 use crate::board::{Pin, Topic};
 use crate::events::Reply;
 use crate::http::{self, Request};
-use crate::mail::{MAIL_MAX, MAX_MAILBOXES};
+use crate::mail::{MAIL_MAX, Notice};
 use crate::peers::{MAX_SIGNAL_BYTES, Peer, Signal};
 use crate::store::{Entry, Page, Usage};
 use crate::text::{clean, constant_time_eq, json};
-use crate::users::{MAX_USERS, Rejected, User, default_name, is_generated};
+use crate::users::{Rejected, User, default_name, is_generated};
 use crate::{CHAT_CAPACITY, Portal, Space, display_name};
 use std::io::{self, Write};
 use std::sync::Mutex;
@@ -137,15 +137,15 @@ fn reply_post(portal: &Portal, topic: &Mutex<Topic>, req: &Request, out: &mut im
     };
     post(portal, req, out, "board", BOARD_MAX, portal.config.board_interval, |ts, name, text| {
         let id = topic.lock().unwrap().reply(ts, name, thread, text)?;
-        portal.events.lock().unwrap().push(req.param("topic"), thread, id, name);
+        portal.events.lock().unwrap().push(req.param("topic"), thread, id, name, text);
         Ok(id)
     })
 }
 
 fn reply_json(reply: &Reply) -> String {
-    let (topic, name) = (json(&reply.topic), json(&reply.name));
+    let (topic, name, text) = (json(&reply.topic), json(&reply.name), json(&reply.excerpt));
     let Reply { id, thread, reply, .. } = reply;
-    format!(r#"{{"id":{id},"topic":{topic},"thread":{thread},"reply":{reply},"name":{name}}}"#)
+    format!(r#"{{"id":{id},"topic":{topic},"thread":{thread},"reply":{reply},"name":{name},"text":{text}}}"#)
 }
 
 /// the json fields announcing replies newer than the client's `events`
@@ -209,13 +209,16 @@ fn account_json(portal: &Portal, req: &Request) -> (String, String) {
         portal.note_guest(device);
     }
     let owner = user.as_ref().map(|user| user.id).or(device);
-    let unread = owner.map_or(0, |owner| portal.mail.lock().unwrap().unread(owner));
+    let (unread, notices) = owner.map(|owner| portal.mail.lock().unwrap().unread(owner)).unwrap_or_default();
+    let notice =
+        |notice: &Notice| format!(r#"{{"from":{},"text":{}}}"#, json(&notice.from), json(&notice.excerpt));
     let description = user.as_ref().map_or("", |user| &user.description);
     let fields = format!(
-        r#""name":{},"registered":{},"description":{},"mail":{unread},"released":{released}"#,
+        r#""name":{},"registered":{},"description":{},"mail":{unread},"unread":{},"released":{released}"#,
         json(&name),
         user.is_some(),
         json(description),
+        list_json(&notices, notice),
     );
     (name, fields)
 }
@@ -354,14 +357,15 @@ fn status(portal: &Portal, out: &mut impl Write) -> io::Result<()> {
         |count: usize, max: usize| Usage { count: count as u64, used: count as u64, max: max as u64 };
     let online = online_json(portal);
     let (threads, replies) = portal.board_usage();
+    let config = &portal.config;
     let stored = [
-        usage_json("accounts", counted(portal.users.lock().unwrap().count(), MAX_USERS), false),
-        usage_json("mailboxes", counted(portal.mail.lock().unwrap().count(), MAX_MAILBOXES), false),
+        usage_json("accounts", counted(portal.users.lock().unwrap().count(), config.max_users), false),
+        usage_json("mailboxes", counted(portal.mail.lock().unwrap().count(), config.max_mailboxes), false),
         usage_json("chat messages", counted(portal.chat.lock().unwrap().count(), CHAT_CAPACITY), false),
         usage_json("threads", threads, true),
         usage_json("replies", replies, true),
     ];
-    let space = (portal.config.space)();
+    let space = (config.space)();
     let row = |space: &Space| {
         format!(r#"{{"name":{},"used":{},"max":{}}}"#, json(space.name), space.used, space.size)
     };

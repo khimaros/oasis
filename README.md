@@ -52,6 +52,35 @@ overwritten. use `PORT=/dev/ttyUSB1 make flash` for a different port.
 
     OASIS_SSID=camp OASIS_ADMIN_TOKEN=sesame make flash
 
+### raspberry pi 4
+
+the same portal runs on a raspberry pi 4 model B, as the only program on
+the device. its data lives on the sd card, so it keeps far more: half of
+the data partition for the board, a quarter for mail at 64KB per mailbox,
+and 10000 accounts.
+
+    make rpi-image    # builds target/rpi/oasis-rpi4.img
+    sudo dd if=target/rpi/oasis-rpi4.img of=/dev/sdX bs=4M conv=fsync
+
+the build needs `clang`, `mkfs.vfat` (dosfstools), `mcopy` (mtools), and
+`mke2fs` (e2fsprogs) on the host. its first run downloads the raspberry pi
+kernel and the firmware of the wifi chip.
+
+| variable            | default | meaning                                  |
+|---------------------|---------|------------------------------------------|
+| `OASIS_SSID`        | `OASIS` | network name and portal title            |
+| `OASIS_ADMIN_TOKEN` | unset   | enables pinning and deleting posts       |
+| `RPI_DATA_MB`       | `2048`  | megabytes of the data partition          |
+
+    OASIS_SSID=camp RPI_DATA_MB=16000 make rpi-image
+
+the settings end up in `cmdline.txt` on the first partition of the card,
+where any computer can change them later: `oasis.ssid="base camp"` and
+`oasis.admin_token=sesame`. writing a new image erases the data.
+
+`make test-rpi` boots the image in qemu, which has no wifi. the access
+point has not been tried on a real raspberry pi yet.
+
 ## using
 
 connect to the wifi network. most phones and laptops open the portal on
@@ -82,3 +111,4 @@ token, is visible to anyone in radio range.
     make run        # portal on http://127.0.0.1:8080/
     make test-e2e   # end-to-end tests against the host binary
     make precommit  # formatters and linters
+    make test-rpi   # boots the raspberry pi image in qemu

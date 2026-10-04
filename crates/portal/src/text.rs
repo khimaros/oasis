@@ -11,6 +11,17 @@ pub fn clean(input: &str, max: usize, multiline: bool) -> Option<String> {
     (!trimmed.is_empty() && trimmed.len() <= max).then(|| trimmed.to_string())
 }
 
+/// how a text starts, on one line and in at most about `max` bytes, for
+/// announcing it. cut texts end in three dots.
+pub fn excerpt(text: &str, max: usize) -> String {
+    let line = text.replace('\n', " ");
+    let end = line.char_indices().map(|(index, _)| index).take_while(|index| *index <= max).last();
+    match end.filter(|_| line.len() > max) {
+        Some(end) => format!("{}...", line[..end].trim_end()),
+        None => line,
+    }
+}
+
 /// quoted json string.
 pub fn json(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 2);

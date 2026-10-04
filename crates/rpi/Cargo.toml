@@ -1,0 +1,11 @@
+[package]
+name = "oasis-rpi"
+description = "oasis as the init of a raspberry pi 4: access point, sd card storage, then the portal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oasis-portal = { path = "../portal" }
+libc = "0.2"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
