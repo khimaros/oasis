@@ -1,0 +1,29 @@
+[package]
+name = "oasis-firmware"
+description = "oasis portal firmware for the ESP32"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+# built with the xtensa toolchain, apart from the host workspace
+[workspace]
+
+[dependencies]
+oasis-portal = { path = "../crates/portal" }
+esp-idf-svc = "=0.53.0"
+log = "0.4"
+
+[build-dependencies]
+embuild = "0.33"
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+opt-level = "s"
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "joltwallet/littlefs", version = "1.14" }
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/mdns", version = "1.8.2" }

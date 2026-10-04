@@ -1,0 +1,6 @@
+# single app slot (no OTA) so that the rest of the 4MB flash holds user data
+# name,   type, subtype,  offset,   size
+nvs,      data, nvs,      0x9000,   0x6000
+phy_init, data, phy,      0xf000,   0x1000
+factory,  app,  factory,  0x10000,  0x180000
+storage,  data, littlefs, 0x190000, 0x270000

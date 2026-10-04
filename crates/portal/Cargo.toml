@@ -1,0 +1,6 @@
+[package]
+name = "oasis-portal"
+description = "platform independent captive portal: dns, http, chat, message logs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

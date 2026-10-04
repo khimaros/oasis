@@ -1,0 +1,7 @@
+target/
+.embuild/
+.esp-env.sh
+firmware/tls/
+data/
+backup-*.bin
+__pycache__/

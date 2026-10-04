@@ -1,0 +1,927 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<meta name="theme-color" content="#14130f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>oasis</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%235fbf9f'/%3E%3C/svg%3E">
+<style>
+  /* one corner radius for everything, and a sky blue accent for the active
+     tab, the main button, and the account */
+  :root { color-scheme: dark; --fg: #e8e6df; --dim: #8f8c82; --bg: #14130f; --card: #23211a; --line: #322f27; --accent: #8fc3ee; --r: 0.4rem; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { display: flex; flex-direction: column; height: var(--vh, 100dvh); margin: 0 auto; max-width: 40rem; padding: 0.4rem 1rem 0; overflow: hidden; font: 16px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+  main { flex: 1; min-height: 0; overflow-y: auto; }
+  h2 { margin: 0; font-size: 1.4rem; font-weight: 600; }
+  p { margin: 0; }
+  /* sand, sunset, palm, water, sky. stays visible above the onboarding overlay */
+  #band { position: fixed; top: 0; left: 0; right: 0; z-index: 2; height: 0.4rem; background: linear-gradient(90deg, #f3d9a4, #f7b9a1, #c8e6b0, #9ad9c7, #a9d3f0); }
+
+  /* controls. filled accent: the main action. outlined: a way to skip */
+  button, input, textarea, a.go { font: inherit; color: inherit; background: var(--card); border: 0; border-radius: var(--r); padding: 0.7rem 1rem; }
+  button, a.go { cursor: pointer; text-align: center; text-decoration: none; }
+  input, textarea { display: block; width: 100%; margin-bottom: 0.5rem; }
+  textarea { resize: none; }
+  ::placeholder { color: var(--dim); }
+  button.go, a.go, button.on { background: var(--accent); color: var(--bg); font-weight: 600; }
+  .quiet { background: none; border: 1px solid var(--line); }
+  .wide { display: block; width: 100%; }
+  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+  .row input, .row textarea { flex: 1; margin: 0; }
+  /* fields above each other, with the button at the right like in a row */
+  .stack { display: flex; flex-direction: column; margin-bottom: 0.75rem; }
+  .stack button { align-self: flex-end; }
+  .pair { display: flex; gap: 0.5rem; }
+  .pair > * { flex: 1; }
+
+  /* header: two equal squares around the name of the place */
+  header .row { height: 4rem; gap: 0.75rem; margin: 0; }
+  #place { flex: 1; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .square { flex: none; display: grid; place-items: center; width: 2.5rem; height: 2.5rem; padding: 0; }
+  .square svg { width: 1.125rem; height: 1.125rem; }
+  #who { background: none; border: 1.5px solid var(--accent); color: var(--accent); }
+
+  /* lists */
+  section { display: none; }
+  section.on { display: block; }
+  #chat.on { display: flex; flex-direction: column; height: 100%; }
+  #chatlog { flex: 1; min-height: 0; overflow-y: auto; }
+  .entry { position: relative; background: var(--card); border-radius: var(--r); padding: 0.85rem 1rem; margin-bottom: 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .dot { padding-left: 2.4rem; }
+  .dot::before { content: ""; position: absolute; left: 1rem; top: 1.25rem; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--dot); }
+  .meta, .status { color: var(--dim); font-size: 0.8125rem; }
+  .name { text-decoration: underline; cursor: pointer; }
+  .meta button { padding: 0.1rem 0.5rem; margin-left: 0.5rem; font-size: 0.8125rem; background: var(--bg); }
+  .status { min-height: 1.2rem; }
+
+  /* status: a name, a figure at the right, and a bar for how full it is */
+  #status .card { margin-bottom: 0.75rem; }
+  .meter { margin-bottom: 0.6rem; }
+  .meter > div { display: flex; justify-content: space-between; align-items: baseline; }
+  .bar { display: block; height: 0.4rem; margin-top: 0.3rem; background: var(--bg); border-radius: var(--r); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+
+  /* tab bar */
+  nav { display: flex; flex: none; margin: 0.5rem 0 1rem; padding: 0.3rem; border-radius: var(--r); background: var(--card); }
+  nav button { flex: 1; padding: 0.55rem 0; font-size: 0.875rem; color: var(--dim); background: none; }
+
+  /* onboarding: a mark, a heading with a lead line, cards, one main button */
+  #intro { position: fixed; inset: 0; z-index: 1; overflow-y: auto; padding: 1.9rem 1rem 1rem; background: var(--bg); }
+  #intro > *, #join { display: flex; flex-direction: column; gap: 1rem; max-width: 38rem; margin: 0 auto; }
+  .mark { width: 3.5rem; height: 3.5rem; }
+  .lead { color: var(--dim); }
+  .card { display: flex; flex-direction: column; gap: 0.6rem; background: var(--card); border-radius: var(--r); padding: 0.85rem 1rem; }
+  .label { color: var(--dim); font-size: 0.8125rem; letter-spacing: 0.04em; }
+  /* dot, name, description. the name column is fixed so that the descriptions line up */
+  .feature { display: grid; grid-template-columns: 0.6rem 3rem 1fr; gap: 0 0.8rem; align-items: baseline; }
+  .feature i, .presence i { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--dot); }
+  .presence { display: flex; align-items: center; gap: 0.6rem; }
+  .presence i { flex: none; }
+  .feature span { color: var(--dim); font-size: 0.875rem; }
+  .step { display: grid; grid-template-columns: 1.5rem 1fr; gap: 0 0.7rem; font-size: 0.9375rem; }
+  .step > b { display: grid; place-items: center; height: 1.5rem; border-radius: var(--r); background: var(--bg); color: var(--accent); font-size: 0.8125rem; }
+  .chip { font-family: ui-monospace, monospace; font-size: 0.875rem; background: var(--bg); border-radius: var(--r); padding: 0.1rem 0.4rem; }
+  .lead .chip { background: var(--card); }
+</style>
+</head>
+<body>
+<!-- drawings used more than once: the sun over water mark, and the two header icons -->
+<svg width="0" height="0" style="position:absolute" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <symbol id="mark" viewBox="0 0 56 56" stroke-width="3">
+    <circle cx="28" cy="22" r="11" fill="#f3d9a4"/>
+    <path d="M8 38h40" stroke="#f7b9a1"/><path d="M13 45h30" stroke="#9ad9c7"/><path d="M20 52h16" stroke="#a9d3f0"/>
+  </symbol>
+  <symbol id="chevron" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2.4"><path d="M11 3 5 9l6 6"/></symbol>
+  <symbol id="ring" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M4 13V8a5 5 0 0 1 10 0v5l1.5 1.5h-13zM7.5 16h3"/></symbol>
+  <symbol id="gauge" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2.4"><path d="M4 15V9M9 15V3M14 15v-4"/></symbol>
+  <symbol id="person" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2">
+    <circle cx="9" cy="6" r="3"/><path d="M3 16c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/>
+  </symbol>
+</svg>
+
+<div id="intro" hidden>
+  <div id="welcome">
+    <svg class="mark"><use href="#mark"/></svg>
+    <div>
+      <h2>welcome to the oasis</h2>
+      <p class="lead">a local hangout on a small device nearby. no internet. everything stays here, among the people in range.</p>
+    </div>
+    <div class="card">
+      <div class="feature" style="--dot:#f3d9a4"><i></i><b>board</b><span>notices and discussions that stay</span></div>
+      <div class="feature" style="--dot:#f7b9a1"><i></i><b>chat</b><span>talk with whoever is around</span></div>
+      <div class="feature" style="--dot:#c8e6b0"><i></i><b>mail</b><span>private messages</span></div>
+      <div class="feature" style="--dot:#a9d3f0"><i></i><b>files</b><span>send files straight between devices</span></div>
+    </div>
+    <div class="card" id="escape" hidden>
+      <span class="label">this window is limited. for the full oasis:</span>
+      <a class="go wide" id="browser" target="_blank">open in my browser</a>
+      <p class="meta">android will warn about the connection. choose "continue anyway via browser", then accept the certificate once.</p>
+    </div>
+    <div class="card" id="byhand">
+      <span class="label">this window is limited. for the full oasis:</span>
+      <div class="step"><b>1</b><div>close this window. on iphone, tap <b>done</b> at the top</div></div>
+      <div class="step"><b>2</b><div>open your regular browser and go to <span id="urls"></span></div></div>
+      <div class="step"><b>3</b><div>bookmark it or add it to your home screen</div></div>
+    </div>
+    <button class="quiet wide" id="stay">keep using this window</button>
+  </div>
+  <div id="save">
+    <svg class="mark"><use href="#mark"/></svg>
+    <div>
+      <h2>keep the oasis handy</h2>
+      <p class="lead">bookmark this page, or add it to your home screen so that it opens like an app.</p>
+    </div>
+    <div class="card">
+      <span class="label">iphone</span>
+      <div class="step"><b>1</b><div>tap the share button</div></div>
+      <div class="step"><b>2</b><div>choose <b>add to home screen</b></div></div>
+    </div>
+    <div class="card">
+      <span class="label">android</span>
+      <div class="step"><b>1</b><div>open the browser menu</div></div>
+      <div class="step"><b>2</b><div>choose <b>add to home screen</b></div></div>
+    </div>
+    <div class="card">
+      <span class="label">whenever you are on this wifi, it lives at</span>
+      <div id="homes"></div>
+    </div>
+    <button class="go wide" id="saved">got it</button>
+  </div>
+  <div class="status"></div>
+</div>
+
+<div id="band"></div>
+<header>
+  <div class="row">
+    <button class="square" id="back" hidden><svg><use href="#chevron"/></svg></button>
+    <b id="place"></b>
+    <button class="square" id="bell"><svg><use href="#ring"/></svg></button>
+    <button class="square" id="info"><svg><use href="#gauge"/></svg></button>
+    <button class="square" id="who"><svg><use href="#person"/></svg></button>
+  </div>
+  <div class="status"></div>
+</header>
+
+<main>
+<section id="account">
+  <form id="join">
+    <svg class="mark"><use href="#mark"/></svg>
+    <div>
+      <h2 id="jointitle"></h2>
+      <p class="lead" id="joinhint">others see you as <span class="chip" id="guest"></span> until you pick a name.</p>
+    </div>
+    <div>
+      <input id="username" maxlength="24" placeholder="username" autocomplete="username">
+      <input id="password" type="password" maxlength="64" autocomplete="current-password">
+      <textarea id="description" rows="2" maxlength="160" placeholder="about you (optional)"></textarea>
+    </div>
+    <button class="go wide" id="signup"></button>
+    <div class="pair">
+      <button type="button" id="login">log in</button>
+      <button type="button" id="logout">log out</button>
+      <button type="button" class="quiet" id="skip">not now</button>
+    </div>
+    <p class="meta">this wifi is open and unencrypted. do not reuse a password from elsewhere.</p>
+  </form>
+</section>
+
+<section id="user">
+  <div class="card">
+    <h2 id="profilename"></h2>
+    <p class="lead" id="profiletext"></p>
+    <button class="go wide" id="profilemail">send mail</button>
+  </div>
+</section>
+
+<section id="notes">
+  <div id="notelist"></div>
+</section>
+
+<section id="status">
+  <div class="card"><span class="label">online now</span><div id="online"></div></div>
+  <div class="card"><span class="label">stored</span><div id="stored"></div></div>
+  <div class="card"><span class="label">space</span><div id="space"></div></div>
+</section>
+
+<section id="board">
+  <input id="token" type="password" placeholder="admin token" hidden>
+  <div id="topics"></div>
+  <div id="threads" hidden>
+    <div id="threadlist"></div>
+    <form class="stack" id="threadform">
+      <input id="subject" maxlength="80" placeholder="subject" autocomplete="off">
+      <textarea id="threadtext" rows="3" maxlength="2000" placeholder="start a new thread"></textarea>
+      <button class="go">post</button>
+    </form>
+  </div>
+  <div id="thread" hidden>
+    <div id="opener"></div>
+    <div id="replylist"></div>
+    <form class="row" id="replyform">
+      <textarea id="replytext" rows="1" maxlength="2000" placeholder="reply"></textarea>
+      <button class="go">reply</button>
+    </form>
+  </div>
+</section>
+
+<section id="chat">
+  <div id="chatlog"></div>
+  <form class="row" id="chatform">
+    <input id="chattext" maxlength="280" placeholder="message" autocomplete="off">
+    <button class="go">send</button>
+  </form>
+</section>
+
+<section id="mail">
+  <form class="stack" id="mailform">
+    <input id="mailto" maxlength="24" placeholder="to (a name, like ada or ~amber-otter)" autocomplete="off">
+    <textarea id="mailtext" rows="3" maxlength="1000" placeholder="private message"></textarea>
+    <button class="go">send</button>
+  </form>
+  <div id="maillist"></div>
+</section>
+
+<section id="files">
+  <p class="meta">files travel directly between devices and never touch the oasis.</p>
+  <input id="file" type="file" hidden>
+  <div id="peers"></div>
+  <div id="transfers"></div>
+</section>
+</main>
+
+<nav>
+  <button data-tab="board">board</button>
+  <button data-tab="chat">chat</button>
+  <button data-tab="mail" id="mailtab">mail</button>
+  <button data-tab="files">files</button>
+</nav>
+
+<script>
+const POLL_MS = 2000, CHUNK_BYTES = 16384, BUFFER_HIGH = 1 << 20, GATHER_MS = 2000;
+// captive portal sign-in windows are embedded web views: android marks them
+// "wv" and apple's lack the "Safari" token. they often cannot run WebRTC or
+// save downloads, so we point people at a regular browser.
+const UA = navigator.userAgent;
+const APPLE_SHEET = /AppleWebKit/.test(UA) && !/Safari/.test(UA);
+const ANDROID_VIEW = /; wv\)/.test(UA);
+const LIMITED = !window.RTCPeerConnection || ANDROID_VIEW || APPLE_SHEET;
+const $ = id => document.getElementById(id);
+const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+// randomUUID is unavailable on plain http origins
+const key = sessionStorage.peer ||= hex(crypto.getRandomValues(new Uint8Array(16)));
+// the colors of the band at the top, which topics take their dots from
+const BAND = ['#f3d9a4', '#f7b9a1', '#c8e6b0', '#9ad9c7', '#a9d3f0'];
+// board topics by id, with label and description. the device knows the
+// same ids and rejects others.
+const TOPICS = {
+  general: ['general', 'anything that fits nowhere else'],
+  events: ['events', 'meetups and happenings nearby'],
+  marketplace: ['marketplace', 'offer, trade, lend, or look for things'],
+  lost: ['lost & found', 'missing or found items and animals'],
+  intros: ['introductions', 'say hello and tell us about yourself'],
+};
+let tab = 'board', since = 0, me = {}, peers = [], links = {}, sendTo = null, greeted = false;
+// where the board is: the topic list, a topic's threads, or one thread
+let topic = null, thread = null, pins = [];
+// proves the login. kept across visits until logging out
+let session = localStorage.session || '';
+// names of the views that the header announces
+const PLACES = { status: 'status', notes: 'notifications' };
+
+// shown in the header and in the onboarding overlay, whichever is visible
+const status = text => document.querySelectorAll('.status').forEach(node => { node.textContent = text; });
+const now = () => Math.floor(Date.now() / 1000);
+const when = ts => ts ? new Date(ts * 1000).toLocaleString() : '';
+
+async function request(method, path, params = {}) {
+  const body = new URLSearchParams({ now: now(), ...(session && { session }), ...params });
+  const url = method === 'GET' ? `${path}?${body}` : path;
+  const res = await fetch(url, method === 'GET' ? {} : { method, body });
+  if (!res.ok) throw new Error(await res.text());
+  return res;
+}
+
+const api = async (...args) => (await request(...args)).json();
+
+// the device sends log records as stored, and parsing them is our job. a
+// record is `[length u16][ts u32][reference u32][name length u8][name]
+// [text]`, little endian, the length counting what follows it. the id of a
+// record is its position counted from `first`. when `first` is null, every
+// record is preceded by its id as a u32 instead.
+const utf8 = new TextDecoder();
+function parseRecords(view, offset, first) {
+  const entries = [], slice = (from, to) => utf8.decode(new Uint8Array(view.buffer, from, to - from));
+  for (let id = first; offset < view.byteLength; id++) {
+    if (first === null) {
+      id = view.getUint32(offset, true);
+      offset += 4;
+    }
+    const end = offset + 2 + view.getUint16(offset, true), text = offset + 11 + view.getUint8(offset + 10);
+    const [ts, ref] = [view.getUint32(offset + 2, true), view.getUint32(offset + 6, true)];
+    entries.push({ id, ts, ref, name: slice(offset + 11, text), text: slice(text, end) });
+    offset = end;
+  }
+  return entries;
+}
+
+// a segment of a log: the id of its first record, the id of an older
+// segment or zero, the deleted and the pinned ids, then the records
+function parsePage(buffer) {
+  const view = new DataView(buffer), [first, older] = [view.getUint32(0, true), view.getUint32(4, true)];
+  let offset = 8;
+  const ids = () => {
+    const count = view.getUint16(offset, true);
+    const list = Array.from({ length: count }, (_, index) => view.getUint32(offset + 2 + 4 * index, true));
+    offset += 2 + 4 * count;
+    return list;
+  };
+  const deleted = ids(), pinned = ids();
+  return { older, pinned, entries: parseRecords(view, offset, first).filter(entry => !deleted.includes(entry.id)) };
+}
+
+// runs an action and reports its failure in the status line
+const attempt = action => action().then(() => status(''), err => status(err.message));
+
+function action(label, run) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  // keeps a tap on the button from also opening the card around it
+  button.onclick = event => { event.stopPropagation(); run(event); };
+  return button;
+}
+
+// a name, wherever one is shown. it opens the profile of its owner, which
+// has the button to send mail
+function nameNode(name) {
+  const node = document.createElement('span');
+  node.textContent = name;
+  if (name === 'anon') return node;
+  node.className = 'name';
+  node.onclick = event => {
+    event.stopPropagation();
+    show(`user/${encodeURIComponent(name)}`);
+  };
+  return node;
+}
+
+// a message: who and when, with `lead` in front, and the text below
+function entryNode(entry, lead = '', ...actions) {
+  const node = document.createElement('div'), meta = document.createElement('div');
+  node.className = 'entry';
+  meta.className = 'meta';
+  meta.append(lead, nameNode(entry.name), ...[when(entry.ts) && ` - ${when(entry.ts)}`, ...actions].filter(Boolean));
+  node.append(meta, entry.text);
+  return node;
+}
+
+// renders one segment of a stored log, newest first
+async function loadLog(path, params, list, render, segment) {
+  const res = await request('GET', path, { ...params, ...(segment ? { segment } : {}) });
+  const page = parsePage(await res.arrayBuffer());
+  if (!segment) list.replaceChildren();
+  list.querySelector('.older')?.remove();
+  list.append(...page.entries.reverse().map(render));
+  if (page.older) {
+    const more = action('older', () => attempt(() => loadLog(path, params, list, render, page.older)));
+    more.className = 'older';
+    list.append(more);
+  }
+}
+
+// --- board ---
+// three views: the topics, the threads of a topic, and one thread.
+
+// the reference of a thread tells where its replies start, and the first
+// line of its text is its subject.
+function asThread(entry) {
+  const [subject, ...body] = entry.text.split('\n');
+  return { ...entry, number: entry.ref, subject, body: body.join('\n') };
+}
+
+// a card with a bold first line and a dimmed second one, opened by a tap
+function card(title, detail, open, ...actions) {
+  const node = document.createElement('div'), head = document.createElement('b'), meta = document.createElement('div');
+  node.className = 'entry';
+  node.onclick = open;
+  head.textContent = title;
+  meta.className = 'meta';
+  meta.append(...[detail, actions].flat().filter(Boolean));
+  node.append(head, meta);
+  return node;
+}
+
+// admin only buttons, which appear once the admin token is entered
+const admin = (label, path, params, done) => $('token').value && action(label, () => attempt(async () => {
+  await api('POST', path, { topic, token: $('token').value, ...params });
+  await done();
+}));
+
+function showTopics() {
+  $('topics').replaceChildren(...Object.entries(TOPICS).map(([id, [label, about]], index) => {
+    const node = card(label, about, () => show(`board/${id}`));
+    node.classList.add('dot');
+    node.style.setProperty('--dot', BAND[index % BAND.length]);
+    return node;
+  }));
+}
+
+async function fetchThreads(at) {
+  const res = await request('GET', '/api/board', { topic, ...(at && { segment: at }) });
+  const page = parsePage(await res.arrayBuffer());
+  return { ...page, entries: page.entries.map(asThread) };
+}
+
+function threadCard(entry) {
+  const pinned = pins.includes(entry.id);
+  const detail = [pinned && 'pinned - ', nameNode(entry.name), when(entry.ts) && ` - ${when(entry.ts)}`];
+  return card(entry.subject, detail, () => { thread = entry; show(`board/${topic}/${entry.id}`); },
+    admin(pinned ? 'unpin' : 'pin', '/api/pin', { id: entry.id, pinned: pinned ? 0 : 1 }, loadThreads),
+    admin('delete', '/api/delete', { id: entry.id }, loadThreads));
+}
+
+// one page of threads, newest first. the first page starts with the pinned
+// threads, fetching those that live on older pages.
+async function loadThreads(older) {
+  const page = await fetchThreads(older), list = $('threadlist');
+  if (!older) {
+    pins = page.pinned;
+    const find = async id => (page.entries.find(entry => entry.id === id) ? page : await fetchThreads(id))
+      .entries.find(entry => entry.id === id);
+    const pinned = await Promise.all(pins.map(find));
+    list.replaceChildren(...pinned.filter(Boolean).map(threadCard));
+  }
+  list.querySelector('.older')?.remove();
+  list.append(...page.entries.reverse().filter(entry => !pins.includes(entry.id)).map(threadCard));
+  if (page.older) {
+    const more = action('older', () => attempt(() => loadThreads(page.older)));
+    more.className = 'older';
+    list.append(more);
+  }
+}
+
+// replies after reply `after`. long threads arrive in several pages
+async function loadReplies(after) {
+  const res = await request('GET', '/api/thread', { topic, thread: thread.id, after });
+  // the reply starts with the id to continue after, zero for the last page
+  const view = new DataView(await res.arrayBuffer()), following = view.getUint32(0, true), list = $('replylist');
+  list.querySelector('.older')?.remove();
+  list.append(...parseRecords(view, 4, null).map(reply => entryNode(reply, '',
+    admin('delete', '/api/delete', { id: reply.id, log: 'replies' }, loadThread))));
+  if (following) {
+    const more = action('more', () => attempt(() => loadReplies(following)));
+    more.className = 'older';
+    list.append(more);
+  }
+}
+
+async function loadThread() {
+  forget(`${topic}/${thread.id}`);
+  $('opener').replaceChildren(entryNode({ ...thread, text: thread.body }));
+  $('replylist').replaceChildren();
+  await loadReplies(thread.number - 1);
+}
+
+// the back arrow and the name of the current place, at the top left. only
+// shown below the topic list of the board, where there is a way back
+function showPlace() {
+  const below = tab === 'board' && topic;
+  $('back').hidden = !below && !ASIDE.includes(tab);
+  $('place').textContent = below ? (thread ? thread.subject : TOPICS[topic][0]) : PLACES[tab] || '';
+}
+
+// --- notifications ---
+// the device announces recent replies to everyone and counts unread mail.
+// which threads we take part in is only known here: `involved` remembers
+// the subjects of threads we started or replied to, and `notes` who replied
+// to them last. both live in this browser, so they do not follow an account
+// to another device.
+
+const MAX_INVOLVED = 50;
+const recall = name => JSON.parse(localStorage[name] || '{}');
+const involved = recall('involved'), notes = recall('notes');
+let cursor = localStorage.events === undefined ? null : +localStorage.events;
+// replies we wrote during this visit, which must not ring our own bell
+const own = new Set();
+
+function involve(key, subject) {
+  delete involved[key];
+  involved[key] = subject;
+  Object.keys(involved).slice(0, -MAX_INVOLVED).forEach(old => delete involved[old]);
+  localStorage.involved = JSON.stringify(involved);
+}
+
+function forget(key) {
+  delete notes[key];
+  localStorage.notes = JSON.stringify(notes);
+  showNotes();
+}
+
+// replies by others to threads we take part in become notes
+function noteReplies({ events, replies }) {
+  replies.forEach(reply => {
+    const key = `${reply.topic}/${reply.thread}`;
+    if (key in involved && !own.has(`${reply.topic}/${reply.reply}`)) notes[key] = reply.name;
+  });
+  cursor = localStorage.events = events;
+  localStorage.notes = JSON.stringify(notes);
+  showNotes();
+}
+
+function showNotes() {
+  const mail = me.mail && card(`${me.mail} new mail`, '', () => show('mail'));
+  const replied = Object.entries(notes).map(([key, name]) =>
+    card(involved[key] || key, `${name} replied`, () => show(`board/${key}`)));
+  $('bell').classList.toggle('on', !!(mail || replied.length));
+  $('notelist').replaceChildren(...[mail, ...replied].filter(Boolean));
+}
+
+// --- status ---
+
+// dot colors of the online list: palm green for clients that have the
+// page open, sand for devices that are only connected to the wifi
+const IN_APP = '#c8e6b0', ON_WIFI = '#f3d9a4';
+const kb = bytes => `${Math.ceil(bytes / 1024)} KB`;
+
+function meter(name, figure, used, max) {
+  const node = document.createElement('div'), head = document.createElement('div');
+  const [label, detail, bar, fill] = ['b', 'span', 'span', 'i'].map(tag => document.createElement(tag));
+  node.className = 'meter';
+  [label.textContent, detail.textContent, detail.className, bar.className] = [name, figure, 'meta', 'bar'];
+  fill.style.width = `${max ? Math.min(100, 100 * used / max) : 0}%`;
+  bar.append(fill);
+  head.append(label, detail);
+  node.append(head, bar);
+  return node;
+}
+
+// who is here, how much is stored of how much fits, and how full the
+// partitions of the device are
+async function loadStatus() {
+  const state = await api('GET', '/api/status');
+  // a dot tells who has the oasis open from who is only on the wifi
+  $('online').replaceChildren(...state.online.map(({ name, app }) => {
+    const row = document.createElement('div');
+    row.className = 'presence';
+    row.style.setProperty('--dot', app ? IN_APP : ON_WIFI);
+    row.append(document.createElement('i'), nameNode(name), app ? '' : ' on the wifi, not in the oasis');
+    return row;
+  }));
+  $('stored').replaceChildren(...state.stored.map(row => meter(row.name,
+    row.bytes ? `${row.count} in ${kb(row.used)} of ${kb(row.max)}` : `${row.count} of ${row.max}`, row.used, row.max)));
+  $('space').replaceChildren(...state.space.map(row => meter(row.name, `${kb(row.used)} of ${kb(row.max)}`, row.used, row.max)));
+}
+
+function showBoard() {
+  showPlace();
+  $('topics').hidden = !!topic;
+  $('threads').hidden = !topic || !!thread;
+  $('thread').hidden = !thread;
+  if (!topic) return showTopics();
+  attempt(() => thread ? loadThread() : loadThreads());
+}
+
+// mailbox entries name the other party. their reference is 1 for mail we
+// sent and 0 for mail we received
+function mailEntry(entry) {
+  const sent = entry.ref === 1, other = entry.name;
+  const reply = !sent && action('reply', () => {
+    $('mailto').value = other;
+    $('mailtext').focus();
+  });
+  return entryNode(entry, sent ? 'to ' : 'from ', reply);
+}
+// reading the mailbox marks its mail as read on the device. the count is
+// cleared here right away instead of waiting for the next poll to say so
+async function loadMail() {
+  await loadLog('/api/mail', {}, $('maillist'), mailEntry);
+  showAccount({ ...me, mail: 0 });
+  showNotes();
+}
+
+// opens the mail tab with a message to `name` started
+function writeMail(name) {
+  showIntro();
+  show('mail');
+  $('mailto').value = name;
+  $('mailtext').focus();
+}
+
+function showAccount(state) {
+  me = state;
+  $('who').title = state.registered ? state.name : 'sign up / log in';
+  $('mailtab').textContent = state.mail ? `mail (${state.mail})` : 'mail';
+  if (state.mail && tab === 'mail') attempt(loadMail);
+}
+
+function showChat(entries) {
+  const log = $('chatlog'), pinned = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+  log.append(...entries.map(entry => entryNode(entry)));
+  if (entries.length) since = entries.at(-1).id;
+  if (pinned) log.scrollTop = log.scrollHeight;
+}
+
+function showPeers() {
+  const rows = peers.map(peer => {
+    const row = document.createElement('div');
+    row.className = 'entry';
+    row.append(nameNode(peer.name), ' ', action('send file', () => { sendTo = peer.id; $('file').click(); }));
+    return row;
+  });
+  const empty = window.RTCPeerConnection ? 'nobody else is here yet' : 'file sharing needs a regular browser';
+  $('peers').replaceChildren(...(rows.length && window.RTCPeerConnection ? rows : [empty]));
+}
+
+// --- onboarding ---
+// a full screen overlay with two pages. `welcome` is shown in sign-in
+// windows: what the oasis is and how to reach it from a regular browser.
+// `join` is the sign up form, which a regular browser opens on the first
+// visit and the account button opens later.
+
+const PAGES = ['welcome', 'save'];
+
+function showIntro(page) {
+  $('intro').hidden = !PAGES.includes(page);
+  PAGES.forEach(id => { $(id).hidden = id !== page; });
+}
+
+// apple's sign-in sheet only offers its "done" once the OS connectivity
+// check succeeds, and closing it any other way drops the wifi. so the
+// device is told to answer that check from the first load on. the reload
+// prompts the sheet to check again. android is left alone: its window
+// would close by itself, before anyone has read the page.
+async function releaseAppleSheet() {
+  await api('POST', '/api/release');
+  location.reload();
+}
+
+// one form for signing up, logging in, and editing the profile
+function fillJoin() {
+  const inside = me.registered;
+  [$('username').value, $('password').value, $('description').value] = [inside ? me.name : '', '', me.description || ''];
+  $('jointitle').textContent = inside ? 'your profile' : 'join the oasis';
+  $('password').placeholder = inside ? 'new password (optional)' : 'password (6 or more characters)';
+  $('signup').textContent = inside ? 'save' : 'sign up';
+  $('joinhint').hidden = $('login').hidden = $('skip').hidden = inside;
+  $('logout').hidden = !inside;
+}
+
+// the account button opens the form, and closes it again
+const openJoin = () => tab === 'account' ? goBack() : show('account');
+
+// signs up, logs in, or saves the profile, and keeps the session it returns
+async function authenticate(path) {
+  const fields = { username: $('username').value, password: $('password').value, description: $('description').value };
+  session = localStorage.session = (await api('POST', path, fields)).session;
+  closeJoin();
+  await poll();
+}
+
+// the profile page of a name. guests have no description
+async function loadUser(name) {
+  const blank = { name, description: '' };
+  const user = name[0] === '~' ? blank : await api('GET', '/api/user', { name }).catch(() => blank);
+  $('profilename').textContent = user.name;
+  $('profiletext').textContent = user.description;
+  $('profilemail').hidden = user.name === me.name;
+  $('profilemail').onclick = () => writeMail(user.name);
+}
+
+// after the first sign up, or declining it, a regular browser is told once
+// how to find the oasis again
+function closeJoin() {
+  localStorage.welcomed = 1;
+  goBack();
+  showIntro(LIMITED || localStorage.saved ? '' : 'save');
+}
+
+function updateIntro({ hosts, https, released, name, registered }) {
+  const chips = () => hosts.flatMap((host, index) => {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = `http://${host}`;
+    return index ? [' or ', chip] : [chip];
+  });
+  $('urls').replaceChildren(...chips());
+  $('homes').replaceChildren(...chips());
+  $('guest').textContent = name;
+  // android's sign-in window offers "continue anyway via browser" on a page
+  // with an untrusted certificate, which is the one way out of it into the
+  // real browser. the device's https only exists to trigger that offer.
+  $('browser').href = `https://${hosts.at(-1)}/`;
+  $('escape').hidden = !(https && ANDROID_VIEW);
+  $('byhand').hidden = !$('escape').hidden;
+  if (APPLE_SHEET && !released && !greeted) attempt(releaseAppleSheet);
+  // a first visit from a regular browser goes straight to sign up
+  if (!LIMITED && !registered && !localStorage.welcomed && !greeted) openJoin();
+  greeted = true;
+}
+
+async function poll() {
+  const state = await api('GET', '/api/poll', { key, since, ...(cursor !== null && { events: cursor }) });
+  document.title = state.title;
+  updateIntro(state);
+  showAccount(state);
+  noteReplies(state);
+  $('token').hidden = !(state.admin && sessionStorage.admin);
+  peers = state.peers;
+  showChat(state.chat);
+  if (tab === 'status') attempt(loadStatus);
+  showPeers();
+  state.signals.forEach(signal => attempt(() => onSignal(signal)));
+}
+
+// --- peer to peer file transfer ---
+
+const peerName = id => peers.find(peer => peer.id === id)?.name || 'someone';
+const signal = (to, data) => api('POST', '/api/signal', { key, to, data: JSON.stringify(data) });
+
+function transferNode(text) {
+  const node = document.createElement('div');
+  node.className = 'entry';
+  node.textContent = text;
+  $('transfers').prepend(node);
+  return node;
+}
+
+// local description once ICE candidates are gathered, so that a single
+// signal carries everything. tcp candidates are dropped to keep it small.
+async function describe(pc, description) {
+  await pc.setLocalDescription(description);
+  await new Promise(done => {
+    pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && done();
+    setTimeout(done, GATHER_MS);
+  });
+  return pc.localDescription.sdp.split('\r\n').filter(line => !/^a=candidate.* tcp /i.test(line)).join('\r\n');
+}
+
+// browsers hide local addresses behind mDNS names, which do not resolve
+// reliably on a hotspot. the device tells us the sender's real address.
+const reveal = (sdp, ip) => sdp.replace(/[0-9a-f-]+\.local/g, ip);
+
+async function offerFile(to, file) {
+  const pc = links[to] = new RTCPeerConnection(), channel = pc.createDataChannel('file');
+  const node = transferNode(`offering ${file.name} to ${peerName(to)}`);
+  channel.onopen = () => attempt(() => pump(channel, file, node));
+  channel.onmessage = () => { node.textContent = `sent ${file.name}`; pc.close(); };
+  const sdp = await describe(pc, await pc.createOffer());
+  await signal(to, { type: 'offer', sdp, name: file.name, size: file.size });
+}
+
+async function pump(channel, file, node) {
+  channel.bufferedAmountLowThreshold = CHUNK_BYTES;
+  for (let sent = 0; sent < file.size; sent += CHUNK_BYTES) {
+    if (channel.bufferedAmount > BUFFER_HIGH) await new Promise(done => { channel.onbufferedamountlow = done; });
+    channel.send(await file.slice(sent, sent + CHUNK_BYTES).arrayBuffer());
+    node.textContent = `sending ${file.name} ${Math.floor(100 * sent / file.size)}%`;
+  }
+  channel.send('done');
+}
+
+async function acceptFile({ from, ip, data }) {
+  const pc = links[from] = new RTCPeerConnection(), chunks = [];
+  const node = transferNode(`receiving ${data.name}`);
+  pc.ondatachannel = ({ channel }) => {
+    channel.binaryType = 'arraybuffer';
+    channel.onmessage = ({ data: chunk }) => {
+      if (chunk !== 'done') return chunks.push(chunk);
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(new Blob(chunks));
+      link.download = link.textContent = data.name;
+      node.replaceChildren('received ', link);
+      channel.send('ok');
+    };
+  };
+  await pc.setRemoteDescription({ type: 'offer', sdp: reveal(data.sdp, ip) });
+  await signal(from, { type: 'answer', sdp: await describe(pc, await pc.createAnswer()) });
+}
+
+async function onSignal({ from, ip, data }) {
+  data = JSON.parse(data);
+  if (data.type === 'answer') return links[from]?.setRemoteDescription({ type: 'answer', sdp: reveal(data.sdp, ip) });
+  if (data.type !== 'offer') return;
+  const node = transferNode(`${peerName(from)} offers ${data.name} (${Math.ceil(data.size / 1024)} KB) `);
+  node.append(action('accept', () => { node.remove(); attempt(() => acceptFile({ from, ip, data })); }));
+  show('files');
+}
+
+// --- wiring ---
+
+// --- navigation ---
+// the address after # says where we are: `board`, `board/<topic>`,
+// `board/<topic>/<thread>`, `chat`, `mail`, `files`, or `account`. taps
+// only change the address and `route` draws what it says, so the browser's
+// back button and the arrow in the header do the same thing.
+
+const VIEWS = ['board', 'chat', 'mail', 'files', 'account', 'status', 'user', 'notes'];
+// views opened from the header or a name instead of the tab bar. they show
+// the arrow
+const ASIDE = ['account', 'status', 'user', 'notes'];
+
+// goes to `path`, leaving the current place in the history.
+function show(path) {
+  if (location.hash === `#${path}`) return;
+  history.pushState({ inside: true }, '', `#${path}`);
+  route();
+}
+
+// one step back. a place that was opened directly has no history inside
+// the oasis, so the arrow goes one level up instead of leaving the page.
+function goBack() {
+  if (history.state?.inside) return history.back();
+  const up = tab === 'board' ? location.hash.slice(1).split('/').slice(0, -1).join('/') : '';
+  history.replaceState(null, '', `#${up || 'board'}`);
+  route();
+}
+
+async function findThread(id) {
+  const page = await fetchThreads(id).catch(() => ({ entries: [] }));
+  return page.entries.find(entry => entry.id === id) || null;
+}
+
+// draws the place named by the address.
+async function route() {
+  const [view, topicId, threadId] = location.hash.slice(1).split('/');
+  if (view === 'admin') {
+    // remembered for this visit, since the address moves on
+    sessionStorage.admin = 1;
+    history.replaceState(null, '', '#board');
+  }
+  tab = VIEWS.includes(view) ? view : 'board';
+  topic = tab === 'board' && TOPICS[topicId] ? topicId : null;
+  const id = topic ? +threadId || 0 : 0;
+  thread = !id ? null : thread?.id === id ? thread : await findThread(id);
+  document.querySelectorAll('section, nav button').forEach(node => {
+    node.classList.toggle('on', (node.dataset.tab || node.id) === tab);
+  });
+  showPlace();
+  if (tab === 'board') showBoard();
+  if (tab === 'mail') attempt(loadMail);
+  if (tab === 'account') fillJoin();
+  if (tab === 'status') attempt(loadStatus);
+  if (tab === 'user') attempt(() => loadUser(decodeURIComponent(topicId || '')));
+}
+
+// submits a form through `send`, without leaving the page
+const onSubmit = (form, send) => { $(form).onsubmit = event => { event.preventDefault(); attempt(send); }; };
+
+// some browsers lay the on-screen keyboard over the page instead of
+// resizing it. sizing the layout to the visible area keeps the nav and the
+// chat box in view.
+const fit = () => { document.body.style.setProperty('--vh', `${visualViewport.height}px`); scrollTo(0, 0); };
+if (window.visualViewport) { visualViewport.onresize = fit; fit(); }
+
+document.querySelectorAll('nav button').forEach(button => { button.onclick = () => show(button.dataset.tab); });
+$('back').onclick = goBack;
+window.onpopstate = route;
+$('token').onchange = showBoard;
+onSubmit('threadform', async () => {
+  const subject = $('subject').value;
+  const { id } = await api('POST', '/api/board', { topic, subject, text: $('threadtext').value });
+  involve(`${topic}/${id}`, subject.trim());
+  $('subject').value = $('threadtext').value = '';
+  await loadThreads();
+});
+onSubmit('replyform', async () => {
+  const { id } = await api('POST', '/api/reply', { topic, thread: thread.id, text: $('replytext').value });
+  own.add(`${topic}/${id}`);
+  involve(`${topic}/${thread.id}`, thread.subject);
+  $('replytext').value = '';
+  await loadThread();
+});
+$('saved').onclick = () => { localStorage.saved = 1; showIntro(); };
+$('who').onclick = openJoin;
+$('info').onclick = () => tab === 'status' ? goBack() : show('status');
+$('bell').onclick = () => tab === 'notes' ? goBack() : show('notes');
+onSubmit('join', () => authenticate(me.registered ? '/api/profile' : '/api/register'));
+$('login').onclick = () => attempt(() => authenticate('/api/login'));
+$('logout').onclick = () => { session = localStorage.session = ''; closeJoin(); attempt(poll); };
+$('skip').onclick = closeJoin;
+$('stay').onclick = () => { sessionStorage.stayed = 1; showIntro(); };
+showIntro(LIMITED && !sessionStorage.stayed ? 'welcome' : '');
+onSubmit('chatform', async () => {
+  await api('POST', '/api/chat', { text: $('chattext').value });
+  $('chattext').value = '';
+  await poll();
+});
+onSubmit('mailform', async () => {
+  await api('POST', '/api/mail', { to: $('mailto').value, text: $('mailtext').value });
+  $('mailtext').value = '';
+  await loadMail();
+});
+$('file').onchange = () => {
+  const file = $('file').files[0];
+  $('file').value = '';
+  if (file) attempt(() => offerFile(sendTo, file));
+};
+route();
+(async function loop() {
+  await poll().catch(() => status('reconnecting'));
+  setTimeout(loop, POLL_MS);
+})();
+</script>
+</body>
+</html>

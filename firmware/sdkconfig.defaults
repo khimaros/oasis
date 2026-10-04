@@ -1,0 +1,10 @@
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_HZ=1000
+
+# one lease per station the access point accepts
+CONFIG_LWIP_DHCPS_MAX_STATION_NUM=10
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# https listener that presents the self-signed certificate
+CONFIG_ESP_TLS_SERVER=y

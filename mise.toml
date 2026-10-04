@@ -1,0 +1,16 @@
+# pinned build toolchain. `make setup` installs everything listed here.
+
+[tools]
+rust = "1.97.0"
+python = "3.14.7"
+ruff = "0.16.10"
+node = "25.9.0"
+cmake = "3.31.12"
+ninja = "1.13.2"
+"github:esp-rs/espup" = "0.18.0"
+"github:esp-rs/espflash" = "4.6.0"
+"cargo:ldproxy" = "0.3.5"
+
+[env]
+# xtensa rust fork installed by espup into the mise managed RUSTUP_HOME
+ESP_RUST_VERSION = "1.97.0.0"

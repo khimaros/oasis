@@ -1,0 +1,287 @@
+# design
+
+## layout
+
+    crates/portal   platform independent portal, std only, zero dependencies
+    crates/host     runs the portal on a development host
+    firmware        ESP32 binary: wifi access point + littlefs, then the portal
+    tests/e2e       python tests that drive the host binary over sockets
+    tests/browser   a headless chrome that clicks through the page
+
+`firmware` is excluded from the cargo workspace because it builds with the
+xtensa rust fork (`firmware/rust-toolchain.toml`) and `build-std`.
+
+the firmware is std rust on ESP-IDF (`esp-idf-svc`). ESP-IDF provides
+sockets and a filesystem behind `std::net` and `std::fs`, which is what lets
+the portal crate run unchanged on both targets (R12).
+
+## network
+
+the device runs an open access point on 10.0.0.1/24. its dhcp server names
+10.0.0.1 as the dns server.
+
+captive portal detection relies on two parts:
+
+- `dns.rs` answers every A query with the portal address
+- `routes.rs` redirects any request whose `Host` header is not the portal
+  to `http://10.0.0.1/`, which catches the connectivity probes of every OS
+
+the firmware also announces `oasis.local` through the ESP-IDF mDNS
+component. clients with Private DNS or DNS over HTTPS never ask our dns, so
+names only it knows fail for them, while `.local` is resolved by multicast.
+`Config.aliases` lists such names: they are served without a redirect and
+sent to clients in the poll response.
+
+captive sign-in windows are embedded web views that often lack WebRTC and
+downloads. `index.html` recognizes them by user agent, a heuristic that
+runs on the client, and steers people to a regular browser (see onboarding).
+
+the page cannot be an installable PWA: service workers and install prompts
+need https, and the device cannot hold a certificate that browsers trust
+for a local name or address. meta tags let a home screen shortcut open
+without browser chrome where the OS allows it.
+
+## http
+
+`http.rs` is a small http/1.1 server on `std::net::TcpListener`: a fixed
+pool of worker threads, one request per connection, bounded head and body
+sizes. the fixed pool bounds memory on the device. bodies are urlencoded
+forms and responses are hand written json, which avoids a json dependency.
+
+the UI is a single `index.html` with inline css and js, embedded in the
+binary, so a page load is one request.
+
+clients call `GET /api/poll` every two seconds. that one request returns
+new chat messages, the peer list, and pending signals.
+
+## storage
+
+the board is a set of topics. the topic ids live in `lib.rs`, their labels
+and descriptions in `index.html`.
+
+`board.rs` keeps two logs per topic: threads (a quarter of the topic's
+storage) and replies. the reference of a thread record is the id its first
+reply would get, so readers know where its replies start. the reference of
+a reply is the thread's id. the first line of a thread's text is its
+subject.
+
+- the thread list is one segment of the thread log, sent as stored
+- a thread's replies are found by scanning the reply log from the thread's
+  marker and keeping the records of that thread. this is the one place where
+  the device filters. it sends at most 16KB per request and the id to
+  continue after
+- pinned thread ids (at most 8 per topic) are kept in a `pinned` file and
+  sent with every thread page. the client fetches pinned threads that live
+  on older pages by asking for the page that holds them
+- only an admin can pin, or delete threads and replies
+- threads and replies are evicted separately, oldest first. pinning does
+  not protect a thread from eviction
+
+`store.rs` keeps a log as numbered segment files of at most 8000 bytes,
+named by a prefix and the id of their first record.
+
+- a record is binary, little endian: `[length u16][ts u32][reference u32]
+  [name length u8][name][text]`, 11 bytes around the name and the text. the
+  length counts what follows it. the reference is free for the owner of
+  the log
+- a record's id is its position: the first id of its segment plus its
+  index. ids are therefore not stored
+- appending writes one record to the newest segment
+- a full log evicts by deleting the oldest segment file
+- a page of the UI is one segment, sent as stored, so reads never scan
+- only the list of segment ids lives in RAM
+- a record torn by power loss is dropped at the next boot
+- deletions are ids appended to a `deleted` file
+
+a littlefs directory costs two blocks of 4096 bytes, and a file larger
+than about 500 bytes costs whole blocks. so logs do not get a directory
+each. all board logs share `topics/`, named `<topic>.t.<id>` (threads),
+`<topic>.r.<id>` (replies), and `<topic>.pinned`. all mailboxes share
+`mail/`, named `<owner>.<id>`.
+
+8000 bytes fills two blocks. the 2496KB data partition is 624 blocks, and
+the worst case is counted in blocks:
+
+| what                                             | blocks | KB   |
+|--------------------------------------------------|--------|------|
+| board: 5 topics x (7 thread + 22 reply segments) | 292    | 1196 |
+| mail: 100 mailboxes x 2 segments                 | 202    | 827  |
+| accounts, salt, secret, root                     | 16     | 66   |
+| headroom for copy on write                       | 114    | 467  |
+
+the board's text budget is 1200KB, split evenly between the five topics
+(60KB of threads and 180KB of replies each). every limit is enforced by
+eviction, so the worst case cannot be exceeded.
+
+## identity
+
+`users.rs` identifies a device by a hash of its mac address, salted with a
+random value created on first boot so that ids cannot be traced back to a
+mac. the firmware finds the mac through the dhcp lease of the client's
+address (`Config.mac_of`). on a host every source address is its own device.
+
+a client that is not logged in posts under a generated name, `~` plus two
+words picked by its device id. usernames may not start with `~`. clients
+cannot choose a name per request, the device decides it.
+
+an account is a unique username (compared ignoring case), a password, and
+an optional description that others see in its profile.
+
+- passwords are stored as pbkdf2-hmac-sha256 with a salt per account and
+  1000 rounds, which the ESP32 computes in well under a second.
+  `crypto.rs` implements it without dependencies, and the tests compare it
+  with python's hashlib
+- signing up or logging in returns a session token, an hmac over the
+  account id and password hash under a secret created on first boot. it
+  needs no storage, survives reboots, and stops working when the password
+  changes. the page keeps it in `localStorage` and sends it with requests
+- at most 100 accounts are kept. the oldest one makes room for a new one
+
+the network is open and unencrypted, so passwords and tokens can be read
+by anyone in radio range. accounts keep honest people apart, no more.
+
+## mail
+
+`mail.rs` keeps a mailbox per owner, a `Store` of two 4000 byte segments.
+the owner is the account of a logged in client, or else the device id of
+a guest. sending appends to the recipient's mailbox and a copy to the
+sender's. the name of a mail record is the other party, and its reference
+the direction: 0 for received, 1 for sent. mailboxes are opened per
+request. only their ids and the unread counters, reported through the
+poll, stay in RAM.
+
+- mail to a guest is addressed to its generated name. the device keeps
+  the 64 guests seen most recently in RAM to find the device behind a
+  name. generated names can collide, in which case the guest seen last
+  gets the mail. a guest's mailbox is only as private as its mac address
+- at most 100 mailboxes are stored. the one unused for longest makes room
+  for a new one, and a mailbox is deleted with its account
+
+mail crosses the open network unencrypted, like everything else.
+
+## onboarding
+
+a full screen overlay in `index.html` has two pages. which one shows is
+decided on the client:
+
+- `welcome`, in a sign-in window: what the oasis offers and how to open it
+  in a regular browser
+- `join`, in a regular browser: the sign up form. it opens on the first
+  visit of a device without an account and can be skipped. the account
+  button in the top right opens the same form to change the profile
+
+apple's sign-in sheet only offers its "done" once the OS connectivity check
+succeeds, and closing it any other way drops the wifi. so in that sheet the
+page calls `POST /api/release` on its first load and reloads, which prompts
+the OS to check again. calling `window.close()` there is avoided: it
+stopped iOS from offering "done".
+
+android is not released automatically. a stock android sign-in window may
+close by itself as soon as its check succeeds, before the page was read.
+on GrapheneOS the window was observed to stay open even after its checks
+got the success reply, so the page cannot make it close.
+
+android's way out is `firmware/src/https.rs`: a TLS listener on port 443
+with a self-signed certificate. the welcome page links to it. the sign-in
+window reacts to the untrusted certificate by offering "continue anyway
+via browser", which opens the link in the real browser. the browser warns
+once more. whoever accepts is redirected to plain http. the listener
+serves nothing else and handles one connection at a time, since a
+handshake needs tens of KB of heap. the certificate and key are created
+per checkout by `make` (needs `openssl`) and are not in version control.
+the page also tells android users how to do it by hand, and to pick "use
+this network as is" if the portal does not load in their browser. from then on the
+connectivity probes of that client get the success reply its OS expects
+instead of a redirect, the OS marks the network as connected, and the
+window can be closed. the client then believes it has internet. released
+clients are kept in RAM, keyed by address and device.
+
+## status and notifications
+
+`GET /api/status` backs the status page. it lists the clients that have
+the page open (the peers of the signaling table) and the devices that are
+associated with the access point without it (`Config.stations`), reports
+how full every store is against its limit, and passes on what the platform
+says about its partitions (`Config.space`, in `firmware/src/space.rs`: the
+firmware image, the data partition, the settings partition, and the heap).
+
+notifications cost the device almost nothing. `events.rs` keeps the last
+64 replies in RAM: topic, thread, reply id, and who wrote it. a client
+sends the id of the last one it saw with its poll and gets the newer ones.
+which threads a visitor takes part in is only known to the page, which
+remembers the threads it started or replied to in `localStorage` and turns
+replies by others into notes. so notes belong to a browser, not to an
+account, and replies made while nobody polled for 64 replies are missed.
+unread mail is counted by the device and shown by the same button.
+
+every name on the page is drawn by `nameNode` and opens the `user/<name>`
+view, the profile, which has the button to send mail. guests have a
+profile too, without a description.
+
+## navigation
+
+the part of the address after `#` names the place: `board`,
+`board/<topic>`, `board/<topic>/<thread>`, `chat`, `mail`, `files`,
+`account`, `status`, `notes`, or `user/<name>`. taps call `show(path)`, which pushes a history entry, and
+`route()` draws whatever the address says. the browser's back button, the
+arrow in the header, and typed or bookmarked addresses therefore all go
+through the same code. the arrow uses `history.back()` when the current
+place was reached from inside the page, and otherwise goes one level up, so
+that it never leaves the oasis. sign up and the profile form are the
+`account` view of the main page. `#admin` is not a place: it switches the
+admin token field on for the visit and continues to the board.
+
+## look of the page
+
+all sizes and colors are custom properties and a handful of classes at the
+top of the style block in `index.html` (R22). `--r` is the one corner
+radius and `--accent` the one accent color. buttons come in three levels:
+`.go` (filled accent, the main action), plain (an alternative), and
+`.quiet` (outlined, a way to skip). the mark and the two header icons are
+inline svg symbols, defined once and reused, so the page still loads in a
+single request.
+
+## layout of the page
+
+the body is a flex column: header, scrolling main, nav at the bottom. its
+height follows `visualViewport`, and the viewport meta asks browsers to
+resize for the keyboard, so the nav and chat box stay above it.
+
+flash layout (`firmware/partitions.csv`): 1.5MB app, no OTA slot (R2).
+
+## time
+
+the ESP32 has no clock. the first client that posts supplies its unix time
+and the device counts from there. an admin's time overrides it. timestamps
+are zero until then.
+
+## peer to peer
+
+`peers.rs` holds presence and a small signaling queue, both in RAM.
+
+- a polling client registers with a secret `key` and receives a public id
+- `POST /api/signal` queues an opaque message for another peer id, stamped
+  with the sender's ip address
+- signals are delivered once through the recipient's next poll
+
+file sharing uses a WebRTC data channel. offers and answers are sent after
+ICE gathering completes, so a transfer needs two signals. browsers hide
+local addresses behind mDNS names in ICE candidates. the receiver replaces
+those names with the address the device observed, so connections do not
+depend on multicast working across the access point.
+
+## limits
+
+| what                    | limit        |
+|-------------------------|--------------|
+| wifi clients            | 10           |
+| http workers            | 4            |
+| chat history            | 50 messages  |
+| chat message            | 280 bytes    |
+| board post              | 2000 bytes   |
+| accounts                | 100          |
+| mailboxes               | 100          |
+| mailbox                 | 8000 bytes   |
+| mail message            | 1000 bytes   |
+| peers                   | 16           |
+| queued signals          | 12 x 4096 B  |
