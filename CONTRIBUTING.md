@@ -15,7 +15,7 @@ up wifi and storage. this keeps features testable on the host.
 
 features are tested end to end in `tests/e2e` (python, stdlib only) against
 `oasis-host`. the host binary reads `OASIS_*` environment variables so tests
-can shrink limits.
+can shrink limits, and the settings file that `OASIS_CONFIG` names.
 
     make test-e2e
     make precommit

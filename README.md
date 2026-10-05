@@ -5,7 +5,8 @@ open `OASIS` wifi network and a captive portal opens with:
 
 - **board**: a persistent, text only message board. topics (general,
   events, marketplace, lost & found, introductions) hold threads, and
-  threads hold replies. an admin can pin threads
+  threads hold replies. topics show how many threads they hold, and
+  threads how many replies. an admin can pin threads
 - **chat**: ephemeral chat, gone on reboot
 - **mail**: private messages between visitors, with or without an account
 - **files**: peer to peer file transfer between visitors over WebRTC. the
@@ -36,6 +37,8 @@ installed:
     make setup      # once: installs rust, the xtensa rust fork, espflash, ...
     make            # builds the host binary and the firmware
     make flash      # writes the firmware to the board on /dev/ttyUSB0
+    make wipe       # erases accounts, board, and mail on the board
+    make flash-wipe # both: a board as new, with the threads of oasis.conf
     make monitor    # shows the serial log
 
 the first firmware build downloads ESP-IDF into `firmware/.embuild`.
@@ -43,14 +46,38 @@ the first firmware build downloads ESP-IDF into `firmware/.embuild`.
 `make backup` saves the current flash contents of a board before it is
 overwritten. use `PORT=/dev/ttyUSB1 make flash` for a different port.
 
-### build time settings
+### settings
 
-| variable            | default | meaning                                  |
-|---------------------|---------|------------------------------------------|
-| `OASIS_SSID`        | `OASIS` | network name and portal title            |
-| `OASIS_ADMIN_TOKEN` | unset   | enables posting news and deleting posts  |
+the settings are in `oasis.conf`, which is built into the program and so
+flashed along with it. `make` creates it from `oasis.conf.example` the
+first time. it holds passwords and stays out of version control.
 
-    OASIS_SSID=camp OASIS_ADMIN_TOKEN=sesame make flash
+    ssid = base camp
+
+    [user]
+    name = admin
+    password = sesame
+    admin = yes
+
+    [thread]
+    topic = general
+    subject = welcome
+    text = be kind.\nposts are public.
+    pinned = yes
+
+| setting    | meaning                                                      |
+|------------|--------------------------------------------------------------|
+| `ssid`     | network name and portal title, `OASIS` when left out         |
+| `[user]`   | an account that the device makes sure exists at every start, |
+|            | with this `password`, and optionally a `description`.        |
+|            | `admin = yes` makes it an admin                              |
+| `[thread]` | a thread that a fresh board starts with, in a `topic`        |
+|            | (general, events, marketplace, lost, intros), with `subject` |
+|            | and `text`, optionally an `author` and `pinned = yes`        |
+
+the build refuses a file that it cannot read, and names the line.
+flashing again with another password changes that account's password. the
+threads are only started once per board, so deleting one is final.
 
 ### raspberry pi 4
 
@@ -68,15 +95,14 @@ kernel and the firmware of the wifi chip.
 
 | variable            | default | meaning                                  |
 |---------------------|---------|------------------------------------------|
-| `OASIS_SSID`        | `OASIS` | network name and portal title            |
-| `OASIS_ADMIN_TOKEN` | unset   | enables pinning and deleting posts       |
 | `RPI_DATA_MB`       | `2048`  | megabytes of the data partition          |
 
-    OASIS_SSID=camp RPI_DATA_MB=16000 make rpi-image
+    RPI_DATA_MB=16000 make rpi-image
 
-the settings end up in `cmdline.txt` on the first partition of the card,
-where any computer can change them later: `oasis.ssid="base camp"` and
-`oasis.admin_token=sesame`. writing a new image erases the data.
+`oasis.conf` goes into the image like it goes into the firmware. the
+network name can also be changed later, from any computer, in
+`cmdline.txt` on the first partition of the card: `oasis.ssid="base
+camp"`. writing a new image erases the data.
 
 `make test-rpi` boots the image in qemu, which has no wifi. the access
 point has not been tried on a real raspberry pi yet.
@@ -99,12 +125,14 @@ on iphone the sign-in sheet shows "done" right away, and tapping it keeps
 the phone on the wifi. the phone then believes this network has internet,
 so it stops falling back to mobile data until it leaves.
 
-to administer, open `http://10.0.0.1/#admin` and enter the admin token on
-the board tab. threads then show pin and delete buttons, and replies a
-delete button. up to 8 threads can be pinned per topic.
+to administer, log in as an admin account, such as the one in
+`oasis.conf`. the account button changes color, threads show pin and
+delete buttons, and replies a delete button. up to 8 threads can be pinned
+per topic. the profile of any other account has a button that makes it an
+admin too, or ends that. the admins of `oasis.conf` stay admins.
 
-the network is open and unencrypted, so everything, including the admin
-token, is visible to anyone in radio range.
+the network is open and unencrypted, so everything, including an admin's
+password, is visible to anyone in radio range.
 
 ## developing without hardware
 

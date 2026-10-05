@@ -43,6 +43,8 @@
   .square { flex: none; display: grid; place-items: center; width: 2.5rem; height: 2.5rem; padding: 0; }
   .square svg { width: 1.125rem; height: 1.125rem; }
   #who { background: none; border: 1.5px solid var(--accent); color: var(--accent); }
+  /* the sunset of the band */
+  #who.admin { border-color: #f7b9a1; color: #f7b9a1; }
 
   /* lists */
   section { display: none; }
@@ -54,15 +56,22 @@
   .dot { padding-left: calc(2 * var(--gap) + 0.6rem); }
   .dot::before { content: ""; position: absolute; left: var(--gap); top: calc(var(--gap) + 0.425rem); width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--dot); }
   .meta { color: var(--dim); font-size: 0.8125rem; }
+  .pill { float: right; margin-left: var(--tight); padding: 0 0.5rem; border-radius: var(--r); background: var(--line); color: var(--dim); font-size: 0.8125rem; line-height: 1.45rem; }
   .name { text-decoration: underline; cursor: pointer; }
   /* small actions on a message: reply, pin, delete. outlined in the accent so that they read as buttons */
   .meta button { padding: 0.25rem 0.7rem; margin-left: 0.5rem; font-size: 0.8125rem; background: none; border: 1px solid var(--accent); color: var(--accent); }
+  /* small icon buttons at the right end of a first line, left of the count */
+  .tool { float: right; display: grid; place-items: center; width: 1.45rem; height: 1.45rem; margin-left: var(--tight); padding: 0; background: none; color: var(--dim); }
+  .tool svg { width: 1rem; height: 1rem; }
+  .tool.held { color: var(--accent); }
   /* the reply icon of a mail sits below its text, at the right */
   .entry > .square { width: 2.25rem; height: 2.25rem; margin: var(--tight) 0 0 auto; }
   /* what the device refused, in a small dialog above everything else */
   #refusal { position: fixed; inset: 0; z-index: 3; display: grid; place-items: center; padding: var(--gap); background: #0009; }
   #refusal .card { width: 100%; max-width: 20rem; gap: var(--gap); }
-  #refusal button { align-self: flex-end; }
+  #refusal .row { display: flex; justify-content: flex-end; gap: var(--tight); }
+  /* a name with its tag right after it */
+  #user .row { display: flex; align-items: center; }
 
   /* status: a name, a figure at the right, and a bar for how full it is */
   #status .card { margin-bottom: var(--gap); }
@@ -113,6 +122,7 @@
   .feature i, .presence i { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--dot); }
   .presence { display: flex; align-items: center; gap: var(--tight); }
   .presence i { flex: none; }
+  .presence .pill { margin-left: auto; }
   .feature span { color: var(--dim); font-size: 0.875rem; }
   .step { display: grid; grid-template-columns: 1.5rem 1fr; gap: 0 var(--gap); font-size: 0.9375rem; }
   .step > b { display: grid; place-items: center; height: 1.5rem; border-radius: var(--r); background: var(--bg); color: var(--accent); font-size: 0.8125rem; }
@@ -135,7 +145,9 @@
   <symbol id="reply" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M7.5 4 3 8.5 7.5 13M3 8.5h7a5 5 0 0 1 5 5v1"/></symbol>
   <symbol id="envelope" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M2.5 4.5h13v9h-13zM2.5 5l6.5 5 6.5-5"/></symbol>
   <symbol id="bubble" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M2.5 3.5h13v8.5H8l-3.5 3v-3h-2z"/></symbol>
-  <symbol id="gauge" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2.4"><path d="M4 15V9M9 15V3M14 15v-4"/></symbol>
+  <symbol id="pin" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M6.5 2.5h5l-.7 5 2.2 2.5H5l2.2-2.5zM9 10v5.5"/></symbol>
+  <symbol id="bin" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2"><path d="M3.5 5h11M7 5V3h4v2M5 5l.7 10h6.6L13 5M7.5 8v4.5M10.5 8v4.5"/></symbol>
+  <symbol id="gauge"viewBox="0 0 18 18" stroke="currentColor" stroke-width="2.4"><path d="M4 15V9M9 15V3M14 15v-4"/></symbol>
   <symbol id="person" viewBox="0 0 18 18" stroke="currentColor" stroke-width="2">
     <circle cx="9" cy="6" r="3"/><path d="M3 16c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/>
   </symbol>
@@ -227,9 +239,10 @@
 
 <section id="user">
   <div class="card">
-    <h2 id="profilename"></h2>
+    <div class="row"><h2 id="profilename"></h2><span class="pill" id="profileyou" hidden>you</span></div>
     <p class="lead" id="profiletext"></p>
     <button class="go wide" id="profilemail">send mail</button>
+    <button class="wide" id="profileadmin" hidden></button>
   </div>
 </section>
 
@@ -244,7 +257,6 @@
 </section>
 
 <section id="board">
-  <input id="token" type="password" placeholder="admin token" hidden>
   <div id="topics"></div>
   <div id="threads" hidden>
     <div id="threadlist"></div>
@@ -271,7 +283,9 @@
 </section>
 </main>
 
-<div id="refusal" hidden><div class="card"><div id="refused"></div><button class="go" id="okay">okay</button></div></div>
+<div id="refusal" hidden><div class="card"><div id="refused"></div>
+  <div class="row"><button class="quiet" id="cancel" hidden>cancel</button><button class="go" id="okay">okay</button></div>
+</div></div>
 <div id="dock">
   <form class="panel" id="threadform" hidden>
     <div class="label title">new thread<button type="button" title="cancel"><svg><use href="#cross"/></svg></button></div>
@@ -332,17 +346,31 @@ const TOPICS = {
 let tab = 'board', since = 0, me = {}, peers = [], links = {}, sendTo = null, greeted = false;
 // where the board is: the topic list, a topic's threads, or one thread
 let topic = null, thread = null, pins = [];
+// how many threads each topic holds, as told by the poll
+let threadCounts = {};
 // proves the login. kept across visits until logging out
 let session = localStorage.session || '';
 // names of the views that the header announces
 const PLACES = { status: 'status', notes: 'notifications' };
 
-// tells the user what went wrong, in a dialog that stays until dismissed
-function refuse(text) {
-  $('refused').textContent = text;
+// the one dialog. `go` labels its main button. with `ask` it also offers to
+// cancel, and the promise tells which of the two was chosen
+let answer = null;
+function dialog(text, go = 'okay', ask = false) {
+  [$('refused').textContent, $('okay').textContent, $('cancel').hidden] = [text, go, !ask];
   $('refusal').hidden = false;
   $('okay').focus();
+  return new Promise(done => { answer = done; });
 }
+function closeDialog(agreed) {
+  [$('refusal').hidden, $('cancel').hidden, $('okay').textContent] = [true, true, 'okay'];
+  answer?.(agreed);
+  answer = null;
+}
+// tells the user what went wrong, in a dialog that stays until dismissed
+const refuse = text => { dialog(text); };
+// asks before something that cannot be undone
+const sure = (text, go) => dialog(text, go, true);
 const now = () => Math.floor(Date.now() / 1000);
 const when = ts => ts ? new Date(ts * 1000).toLocaleString() : '';
 
@@ -391,7 +419,11 @@ function parsePage(buffer) {
     return list;
   };
   const deleted = ids(), pinned = ids();
-  return { older, pinned, entries: parseRecords(view, offset, first).filter(entry => !deleted.includes(entry.id)) };
+  // logs that count something send a number per record, in the order of ids
+  const counted = view.getUint16(offset, true), counts = offset + 2;
+  const entries = parseRecords(view, counts + 2 * counted, first)
+    .map((entry, index) => index < counted ? { ...entry, count: view.getUint16(counts + 2 * index, true) } : entry);
+  return { older, pinned, entries: entries.filter(entry => !deleted.includes(entry.id)) };
 }
 
 // runs an action and reports its failure to the user
@@ -465,15 +497,43 @@ function card(title, detail, open, ...actions) {
   return node;
 }
 
-// admin only buttons, which appear once the admin token is entered
-const admin = (label, path, params, done) => $('token').value && action(label, () => attempt(async () => {
-  await api('POST', path, { topic, token: $('token').value, ...params });
-  await done();
-}));
+// puts how many threads or replies a card stands for at the right end of
+// its first line. nothing at zero
+function counted(node, count) {
+  if (!count) return node;
+  const pill = document.createElement('span');
+  pill.className = 'pill';
+  pill.textContent = count;
+  node.prepend(pill);
+  return node;
+}
+
+// a small icon button that only an admin gets. `label` names it for those
+// who cannot see it. with `question` it asks before it acts. the device
+// checks the account again
+function admin(icon, label, path, params, done, question) {
+  if (!me.admin) return null;
+  const button = action('', () => attempt(async () => {
+    if (question && !await sure(question, label)) return;
+    await api('POST', path, { topic, ...params });
+    await done();
+  }));
+  button.title = label;
+  button.className = 'tool';
+  button.innerHTML = `<svg><use href="#${icon}"/></svg>`;
+  return button;
+}
+
+// puts icon buttons at the right end of the first line of a card or entry,
+// in the order given. a count that is added later ends up right of them
+function tooled(node, ...tools) {
+  node.prepend(...tools.filter(Boolean).reverse());
+  return node;
+}
 
 function showTopics() {
   $('topics').replaceChildren(...Object.entries(TOPICS).map(([id, [label, about]], index) => {
-    const node = card(label, about, () => show(`board/${id}`));
+    const node = counted(card(label, about, () => show(`board/${id}`)), threadCounts[id]);
     node.classList.add('dot');
     node.style.setProperty('--dot', BAND[index % BAND.length]);
     return node;
@@ -489,9 +549,12 @@ async function fetchThreads(at) {
 function threadCard(entry) {
   const pinned = pins.includes(entry.id);
   const detail = [pinned && 'pinned - ', nameNode(entry.name), when(entry.ts) && ` - ${when(entry.ts)}`];
-  return card(entry.subject, detail, () => { thread = entry; show(`board/${topic}/${entry.id}`); },
-    admin(pinned ? 'unpin' : 'pin', '/api/pin', { id: entry.id, pinned: pinned ? 0 : 1 }, loadThreads),
-    admin('delete', '/api/delete', { id: entry.id }, loadThreads));
+  const pin = admin('pin', pinned ? 'unpin' : 'pin', '/api/pin', { id: entry.id, pinned: pinned ? 0 : 1 }, loadThreads);
+  // the pin of a pinned thread is drawn in the accent color
+  pin?.classList.toggle('held', pinned);
+  const node = card(entry.subject, detail, () => { thread = entry; show(`board/${topic}/${entry.id}`); });
+  const bin = admin('bin', 'delete', '/api/delete', { id: entry.id }, loadThreads, 'delete this thread and its replies?');
+  return counted(tooled(node, pin, bin), entry.count);
 }
 
 // one page of threads, newest first. the first page starts with the pinned
@@ -520,8 +583,8 @@ async function loadReplies(after) {
   // the reply starts with the id to continue after, zero for the last page
   const view = new DataView(await res.arrayBuffer()), following = view.getUint32(0, true), list = $('replylist');
   list.querySelector('.older')?.remove();
-  list.append(...parseRecords(view, 4, null).map(reply => entryNode(reply, '',
-    admin('delete', '/api/delete', { id: reply.id, log: 'replies' }, loadThread))));
+  list.append(...parseRecords(view, 4, null).map(reply => tooled(entryNode(reply),
+    admin('bin', 'delete', '/api/delete', { id: reply.id, log: 'replies' }, loadThread, 'delete this reply?'))));
   if (following) {
     const more = action('more', () => attempt(() => loadReplies(following)));
     more.className = 'older';
@@ -634,6 +697,8 @@ async function loadStatus() {
     row.className = 'presence';
     row.style.setProperty('--dot', app ? IN_APP : ON_WIFI);
     row.append(document.createElement('i'), nameNode(name));
+    // the visitor's own row says so
+    if (app && name === me.name) row.append(Object.assign(document.createElement('span'), { className: 'pill', textContent: 'you' }));
     return row;
   }));
   $('stored').replaceChildren(...state.stored.map(row => meter(row.name,
@@ -706,8 +771,13 @@ function openForm(id) {
 }
 
 function showAccount(state) {
+  const changed = !me.admin !== !state.admin;
   me = state;
   $('who').title = state.registered ? state.name : 'sign up / log in';
+  // an admin is told by the color of the account button, and gets more
+  // buttons on what is on screen
+  $('who').classList.toggle('admin', state.admin);
+  if (changed) route();
   $('mailtab').textContent = state.mail ? `mail (${state.mail})` : 'mail';
   if (state.mail && tab === 'mail') attempt(loadMail);
 }
@@ -781,8 +851,16 @@ async function loadUser(name) {
   const user = name[0] === '~' ? blank : await api('GET', '/api/user', { name }).catch(() => blank);
   $('profilename').textContent = user.name;
   $('profiletext').textContent = user.description;
+  $('profileyou').hidden = user.name !== me.name;
   $('profilemail').hidden = user.name === me.name;
   $('profilemail').onclick = () => writeMail(user.name);
+  // an admin can make any other account an admin, and end that
+  $('profileadmin').hidden = !me.admin || user.admin === undefined || user.name === me.name;
+  $('profileadmin').textContent = user.admin ? 'remove admin' : 'make admin';
+  $('profileadmin').onclick = () => attempt(async () => {
+    await api('POST', '/api/admin', { username: user.name, admin: user.admin ? 0 : 1 });
+    await loadUser(name);
+  });
 }
 
 // after the first sign up, or declining it, a regular browser is told once
@@ -821,7 +899,9 @@ async function poll() {
   updateIntro(state);
   showAccount(state);
   noteReplies(state);
-  $('token').hidden = !(state.admin && sessionStorage.admin);
+  const recount = JSON.stringify(state.threads) !== JSON.stringify(threadCounts);
+  threadCounts = state.threads;
+  if (recount && tab === 'board' && !topic) showTopics();
   peers = state.peers;
   showChat(state.chat);
   if (tab === 'status') attempt(loadStatus);
@@ -941,11 +1021,6 @@ async function findThread(id) {
 async function route() {
   const [view, topicId, threadId] = location.hash.slice(1).split('/');
   writing = null;
-  if (view === 'admin') {
-    // remembered for this visit, since the address moves on
-    sessionStorage.admin = 1;
-    history.replaceState(null, '', '#board');
-  }
   tab = VIEWS.includes(view) ? view : 'board';
   topic = tab === 'board' && TOPICS[topicId] ? topicId : null;
   const id = topic ? +threadId || 0 : 0;
@@ -974,7 +1049,6 @@ if (window.visualViewport) { visualViewport.onresize = fit; fit(); }
 document.querySelectorAll('nav button').forEach(button => { button.onclick = () => show(button.dataset.tab); });
 $('back').onclick = goBack;
 window.onpopstate = route;
-$('token').onchange = showBoard;
 onSubmit('threadform', async () => {
   const subject = $('subject').value;
   const { id } = await api('POST', '/api/board', { topic, subject, text: $('threadtext').value });
@@ -1014,7 +1088,8 @@ onSubmit('mailform', async () => {
   openForm(null);
   await loadMail();
 });
-$('okay').onclick = () => { $('refusal').hidden = true; };
+$('okay').onclick = () => closeDialog(true);
+$('cancel').onclick = () => closeDialog(false);
 $('file').onchange = () => {
   const file = $('file').files[0];
   $('file').value = '';

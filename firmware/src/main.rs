@@ -20,7 +20,7 @@ use esp_idf_svc::sys::{
 use esp_idf_svc::wifi::{
     AccessPointConfiguration, AuthMethod, BlockingWifi, Configuration, EspWifi, WifiDriver,
 };
-use oasis_portal::{Config, Portal, dns};
+use oasis_portal::{Config, Portal, Seed, dns};
 use std::error::Error;
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv4Addr, TcpListener, UdpSocket};
@@ -28,12 +28,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-/// build time settings, e.g. `OASIS_SSID=camp make flash`
-const SSID: &str = match option_env!("OASIS_SSID") {
-    Some(ssid) => ssid,
-    None => "OASIS",
-};
-const ADMIN_TOKEN: Option<&str> = option_env!("OASIS_ADMIN_TOKEN");
+/// the settings file, compiled in, so that it is flashed with the program.
+/// `make` checks it before the build, see `seed.rs` of the portal
+const SETTINGS: &str = include_str!("../../oasis.conf");
+/// name of the network when the settings give none
+const SSID: &str = "OASIS";
 
 const AP_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
 const AP_PREFIX: u8 = 24;
@@ -72,7 +71,7 @@ type Wifi = BlockingWifi<EspWifi<'static>>;
 
 /// starts the access point. dhcp hands out our own address as dns server
 /// so that every lookup reaches the captive dns responder.
-fn start_wifi(modem: Modem<'static>) -> Result<Wifi, EspError> {
+fn start_wifi(modem: Modem<'static>, ssid: &str) -> Result<Wifi, EspError> {
     let sysloop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
     let driver = WifiDriver::new(modem, sysloop.clone(), Some(nvs))?;
@@ -89,7 +88,7 @@ fn start_wifi(modem: Modem<'static>) -> Result<Wifi, EspError> {
     let wifi = EspWifi::wrap_all(driver, EspNetif::new(NetifStack::Sta)?, ap_netif)?;
     let mut wifi = BlockingWifi::wrap(wifi, sysloop)?;
     wifi.set_configuration(&Configuration::AccessPoint(AccessPointConfiguration {
-        ssid: SSID.try_into().expect("ssid too long"),
+        ssid: ssid.try_into().expect("ssid too long"),
         auth_method: AuthMethod::None,
         channel: AP_CHANNEL,
         max_connections: AP_MAX_CLIENTS,
@@ -141,13 +140,12 @@ fn mac_of(ip: IpAddr) -> Option<[u8; 6]> {
     pairs.iter().find(|pair| pair.ip.addr == wanted).map(|pair| pair.mac)
 }
 
-fn config() -> Config {
+fn config(ssid: &str) -> Config {
     Config {
-        title: SSID.into(),
+        title: ssid.into(),
         origin: AP_IP.to_string(),
         aliases: vec![format!("{MDNS_HOST}.local")],
         data_dir: MOUNT_POINT.into(),
-        admin_token: ADMIN_TOKEN.map(String::from),
         mac_of,
         stations,
         space: space::space,
@@ -169,14 +167,21 @@ fn config() -> Config {
 fn main() -> Result<(), Box<dyn Error>> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
-    let _wifi = start_wifi(Peripherals::take()?.modem)?;
+    // a file that the build check let through parses. should it not, the
+    // device still comes up, with defaults
+    let seed = oasis_portal::parse_seed(SETTINGS).unwrap_or_else(|err| {
+        log::error!("settings ignored: {err}");
+        Seed::default()
+    });
+    let ssid = seed.ssid.as_deref().unwrap_or(SSID);
+    let _wifi = start_wifi(Peripherals::take()?.modem, ssid)?;
     let _mdns = start_mdns()?;
     space::measure_firmware();
     let storage = mount_storage()?;
     log::info!("storage: {:?}", storage.info()?);
-    let config = config();
+    let config = config(ssid);
     let names = config.aliases.clone();
-    let portal = Arc::new(Portal::new(config)?);
+    let portal = Arc::new(Portal::new(config, &seed)?);
     let dns_socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DNS_PORT))?;
     thread::Builder::new().stack_size(DNS_STACK).spawn(move || dns::serve(dns_socket, AP_IP))?;
     let https_listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, HTTPS_PORT))?;
@@ -184,6 +189,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     https.spawn(move || https::serve(https_listener, format!("http://{AP_IP}/"), names))?;
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, HTTP_PORT))?;
     let free_heap = unsafe { esp_idf_svc::sys::esp_get_free_heap_size() };
-    log::info!("oasis \"{SSID}\" serving http://{AP_IP}/ with {free_heap} bytes of heap free");
+    log::info!("oasis \"{ssid}\" serving http://{AP_IP}/ with {free_heap} bytes of heap free");
     Ok(oasis_portal::serve(portal, listener)?)
 }

@@ -1,7 +1,7 @@
 // drives two headless chrome tabs through the page over the chrome devtools
 // protocol: the board, sign up, chat, profiles, and a peer to peer file
 // transfer. started by run.sh.
-const [debugPort, base] = process.argv.slice(2);
+const [debugPort, base, adminUser, adminPassword] = process.argv.slice(2);
 
 async function tab(url) {
   const info = await (await fetch(`http://127.0.0.1:${debugPort}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' })).json();
@@ -97,6 +97,7 @@ check('the panel sends with an icon at its bottom right', await a.run(
 await a.run("subject.value = 'bike for trade'; threadtext.value = 'red, 3 gears\\nneeds a chain'; threadform.requestSubmit(); 1");
 await a.until("document.querySelector('#threadlist .entry')", 'thread appears');
 check('thread list shows the subject', (await a.run(text('threadlist'))).includes('bike for trade'));
+check('a thread without replies has no count', await a.run("!document.querySelector('#threadlist .pill')"));
 await a.run("document.querySelector('#threadlist .entry').click(); 1");
 await a.until("!document.getElementById('thread').hidden && document.querySelector('#opener .entry')", 'thread view');
 check('thread view shows the body', (await a.run(text('opener'))).includes('needs a chain'));
@@ -117,17 +118,27 @@ await a.run('who.click(); 1');
 await a.until("location.hash === '#account' && document.getElementById('account').classList.contains('on')", 'account view');
 check('sign up is a view with the back arrow', await a.run("getComputedStyle(back).display !== 'none' && intro.hidden"));
 await a.run('back.click(); 1');
-await a.until("location.hash === '#board/marketplace/1' && !document.getElementById('thread').hidden", 'arrow returns from sign up');
+// the page looks the thread up again, and can only reply to it after that
+await a.until("location.hash === '#board/marketplace/1' && !document.getElementById('thread').hidden && thread?.id === 1", 'arrow returns from sign up');
 check('the arrow leaves sign up the way it came', true);
 
 await a.run("replytext.value = 'i have a chain'; replyform.requestSubmit(); 1");
 await a.until("document.querySelector('#replylist .entry')", 'reply appears');
 check('reply is listed', (await a.run(text('replylist'))).includes('i have a chain'));
 await a.run("back.click(); 1");
-await a.until("!document.getElementById('threads').hidden", 'back to threads');
+// a count is a pill at the right end of the first line of its card
+const pill = card => `document.querySelector('${card} .pill')`;
+const placed = card => `(() => { const [box, count, title, below] = ['', ' .pill', ' b', ' .meta'].map(part => document.querySelector('${card}' + part).getBoundingClientRect()); return box.right - count.right < 20 && count.left > title.left && count.bottom <= below.top + 1; })()`;
+const bike = '#threadlist .entry';
+await a.until(`!document.getElementById('threads').hidden && ${pill(bike)}?.textContent === '1'`, 'back to threads');
+check('the thread list counts the replies of a thread', await a.run(placed(bike)));
 await a.run("back.click(); 1");
 const shown = "getComputedStyle(back).display !== 'none'";
 await a.until(`!topics.hidden && !(${shown})`, 'back to the topic list');
+const topicCard = number => `#topics .entry:nth-child(${number})`;
+await a.until(`${pill(topicCard(3))}?.textContent === '1'`, 'thread count');
+check('the topic list counts the threads of a topic', await a.run(placed(topicCard(3))));
+check('a topic without threads has no count', await a.run(`!${pill(topicCard(1))}`));
 check('back twice returns to the topic list, where the arrow is gone', true);
 await a.run("document.querySelectorAll('#topics .entry')[0].click(); 1");
 await a.until(shown, 'the arrow appears');
@@ -195,7 +206,7 @@ await a.until("location.hash === '#status' && stored.innerText.includes('account
 const statusText = await a.run("document.getElementById('status').innerText");
 check('status shows who is online', (await a.run('online.innerText')).includes('ada'));
 check('status shows what is stored and how full the storage is',
-  /accounts\s+1 of 100/.test(statusText) && /threads\s+1 in 1 KB of \d+ KB/.test(statusText) && /storage\s+\d+ KB of \d+ KB/.test(statusText));
+  /accounts\s+2 of 100/.test(statusText) && /threads\s+1 in 1 KB of \d+ KB/.test(statusText) && /storage\s+\d+ KB of \d+ KB/.test(statusText));
 check('status bars are drawn', await a.run("document.querySelectorAll('#status .bar i').length") === 6);
 check('people in the app get a green dot', await a.run("getComputedStyle(document.querySelector('#online .presence i')).backgroundColor") === 'rgb(200, 230, 176)');
 await a.run('back.click(); 1');
@@ -246,6 +257,7 @@ await a.run("show('chat'); chattext.value = 'hello from ada'; chatform.requestSu
 await b.until("chatlog.innerText.includes('hello from ada')", 'chat reaches the other tab');
 await b.run("show('chat'); [...document.querySelectorAll('#chatlog span')].find(s => s.textContent === 'ada').click(); 1");
 await b.until("location.hash === '#user/ada' && profiletext.innerText === 'gardener'", 'profile opens');
+check('the profile of someone else is not marked as the own', await b.run("getComputedStyle(profileyou).display === 'none'"));
 check('a name opens the profile page with its description', await b.run("profilename.innerText === 'ada' && getComputedStyle(back).display !== 'none'"));
 await b.run('profilemail.click(); 1');
 await b.until("tab === 'mail' && mailto.value === 'ada'", 'send mail from the profile');
@@ -259,9 +271,82 @@ await a.until(`location.hash === '#user/' + encodeURIComponent(${JSON.stringify(
 check('a guest name opens a profile as well', await a.run("getComputedStyle(profilemail).display !== 'none'"));
 const clickable = await a.run("show('status'); new Promise(done => setTimeout(() => done(document.querySelectorAll('#online .name').length), 600))");
 check('names on the status page are links too', clickable >= 1);
+const marked = "[...document.querySelectorAll('#online .presence')].filter(row => row.querySelector('.pill')).map(row => row.querySelector('.name').textContent).join()";
+check('the online list marks the visitor', await a.run(marked) === 'ada');
+await a.run("show('user/ada'); 1");
+await a.until("profilename.innerText === 'ada' && getComputedStyle(profileyou).display !== 'none'", 'own profile says so');
+check('the own profile is marked, on the line of the name and right after it', await a.run(`(() => {
+  const [name, you] = [profilename, profileyou].map(node => node.getBoundingClientRect());
+  return you.top >= name.top && you.bottom <= name.bottom && you.left >= name.right && you.left - name.right < 20;
+})()`));
 await a.run("show('mail'); 1");
 await a.until("document.querySelector('#maillist .name')", 'mail list');
 check('names in the mail list are links too', true);
+
+// --- admin ---
+// the built in admin logs in like anyone, here in the tab of the guest
+const pinShown = "[...document.querySelectorAll('#threadlist button')].some(x => x.title === 'pin')";
+// pin and delete are icons on the first line of a card, left of its count
+const toolsPlaced = `(() => {
+  const card = document.querySelector('#threadlist .entry'), left = node => node.getBoundingClientRect().left;
+  const tools = [...card.querySelectorAll('.tool')].sort((one, other) => left(one) - left(other));
+  const [pin, bin, count, below] = [...tools, card.querySelector('.pill'), card.querySelector('.meta')].map(node => node.getBoundingClientRect());
+  return tools.map(tool => tool.title).join() === 'pin,delete' && tools.every(tool => tool.querySelector('svg') && !tool.textContent)
+    && pin.right <= bin.left && bin.right <= count.left && bin.bottom <= below.top + 1 && pin.width < 30;
+})()`;
+const border = "getComputedStyle(who).borderColor";
+const plain = await b.run(border);
+await b.run("show('board/marketplace'); 1");
+await b.until("document.querySelector('#threadlist .entry')", 'threads of the guest');
+check('a guest has no pin button', !(await b.run(pinShown)));
+await b.run(`who.click(); username.value = ${JSON.stringify(adminUser)}; password.value = ${JSON.stringify(adminPassword)}; login.click(); 1`);
+await b.until("who.classList.contains('admin')", 'logged in as the admin');
+check('the account button of an admin has another color', await b.run(border) !== plain);
+await b.until(`location.hash === '#board/marketplace' && ${pinShown}`, 'pin button');
+check('logging in as an admin brings up the pin button', true);
+check('pin and delete are small icons left of the count', await b.run(toolsPlaced));
+await b.run("document.querySelector('#threadlist .entry').click(); 1");
+await b.until("document.querySelector('#replylist .tool')", 'delete icon on a reply');
+check('a reply has a delete icon for an admin', await b.run("document.querySelector('#replylist .tool').title === 'delete'"));
+// deleting asks first
+const replyCount = "document.querySelectorAll('#replylist .entry').length";
+const before = await b.run(replyCount);
+await b.run("document.querySelector('#replylist .tool').click(); 1");
+await b.until(visible('refusal'), 'delete asks first');
+check('delete asks before it deletes',
+  await b.run(`${visible('cancel')} && okay.textContent === 'delete' && refused.innerText.includes('delete this reply')`));
+await b.run('cancel.click(); 1');
+check('cancel keeps the reply', await b.run(`!(${visible('refusal')}) && ${replyCount} === ${before}`));
+await b.run("document.querySelector('#replylist .tool').click(); 1");
+await b.until(visible('refusal'), 'delete asks again');
+await b.run('okay.click(); 1');
+await b.until(`${replyCount} === ${before - 1}`, 'reply deleted');
+check('confirming deletes the reply, and the dialog is its plain self again',
+  await b.run(`!(${visible('refusal')}) && okay.textContent === 'okay' && !(${visible('cancel')})`));
+await b.run("show('board/marketplace'); 1");
+await b.until(`location.hash === '#board/marketplace' && ${pinShown}`, 'back on the thread list');
+// a pinned thread keeps a pin that can be seen: the icon in the accent color, on no background
+const look = title => `(() => { const style = getComputedStyle(document.querySelector('#threadlist .tool[title=${title}]')); return style.backgroundColor + ' ' + style.color; })()`;
+const unpinnedLook = await b.run(look('pin'));
+await b.run("document.querySelector('#threadlist .tool[title=pin]').click(); 1");
+await b.until("document.querySelector('#threadlist .tool[title=unpin]')", 'thread pinned');
+const pinnedLook = await b.run(look('unpin'));
+check(`the pin of a pinned thread is an accent colored icon (${pinnedLook})`,
+  pinnedLook === 'rgba(0, 0, 0, 0) rgb(143, 195, 238)' && pinnedLook !== unpinnedLook);
+await b.run("document.querySelector('#threadlist .tool[title=unpin]').click(); 1");
+await b.until(`!document.querySelector('#threadlist .tool[title=unpin]') && ${pinShown}`, 'thread unpinned');
+await b.run("show('user/ada'); 1");
+await b.until("getComputedStyle(profileadmin).display !== 'none' && profileadmin.textContent === 'make admin'", 'make admin button');
+await b.run('profileadmin.click(); 1');
+await b.until("profileadmin.textContent === 'remove admin'", 'ada is an admin');
+check('an admin makes another account an admin from its profile', true);
+await a.until("who.classList.contains('admin')", 'ada learns of it');
+await a.run("show('board/marketplace'); 1");
+await a.until(pinShown, 'pin button for ada');
+check('the new admin gets the pin button', true);
+await a.run("show('user/ada'); 1");
+await a.until("profilename.innerText === 'ada'", 'own profile');
+check('nobody changes their own admin bit', await a.run("getComputedStyle(profileadmin).display === 'none'"));
 
 // --- peer to peer file transfer ---
 await a.until('peers.length === 1', 'tab a sees tab b');

@@ -31,12 +31,27 @@ over its own wifi hotspot.
   evicted once storage is full. three levels with a back button: a vertical
   list of topics, each with a short description (general, events,
   marketplace, lost & found, introductions), the threads of a topic, and
-  the messages of a thread
+  the messages of a thread. a topic shows how many threads it holds, and a
+  thread in the list how many replies it has: the bare number in a small
+  pill at the right end of the card's first line, and nothing at zero
 - R7: ephemeral chat, held in RAM only, lost on reboot
 - R8: every device gets a generated default name, derived from a hash of
   its mac address. a visitor can sign up with a unique username, a password,
   and an optional description, and log in from any device. username,
   password, and description can be changed later
+- R33: admins are accounts with an admin bit, and log in like anyone. they
+  pin threads, delete threads and replies, and make other accounts admins
+  from their profile page, or end that. the account button of an admin has
+  another color
+- R35: pin and delete are small icon buttons on the first line of a thread
+  card or a reply, left of the count. only admins have them for now. the
+  pin of a pinned thread is drawn in the accent color. delete asks first,
+  in the dialog of R32 with a cancel button next to delete
+- R36: the visitor's own entry in the list of who is around, and their own
+  profile page, are marked as theirs
+- R34: a small settings file is flashed along with the program. it names
+  the network, lists accounts that the device makes sure exist, admins
+  among them, and threads that a fresh board starts with
 - R18: everyone can send and receive private mail, guests under their
   generated name. an account is not needed
 - R21: empty lists are shown empty, without placeholder text

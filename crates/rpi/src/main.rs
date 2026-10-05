@@ -10,7 +10,7 @@ mod wifi;
 
 use link::Link;
 use netlink::Socket;
-use oasis_portal::{Config, Portal, Space, dhcp, dns, mdns};
+use oasis_portal::{Config, Portal, Seed, Space, dhcp, dns, mdns};
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -49,6 +49,8 @@ const DATA_FILESYSTEM: &str = "ext4";
 const MOUNT_POINT: &str = "/data";
 /// certificate and key of the https listener, put there by the image build
 const TLS_DIR: &str = "/tls";
+/// the settings file, put there by the image build
+const SETTINGS_FILE: &str = "/oasis.conf";
 const CMDLINE_FILE: &str = "/proc/cmdline";
 const ARP_FILE: &str = "/proc/net/arp";
 const MEMORY_FILE: &str = "/proc/meminfo";
@@ -72,10 +74,9 @@ const HTTP_STACK: usize = 256 * 1024;
 static WIFI: OnceLock<Wifi> = OnceLock::new();
 
 /// what the kernel command line can set, e.g. `oasis.ssid="base camp"` in
-/// `cmdline.txt` on the boot partition.
+/// `cmdline.txt` on the boot partition. it goes before the settings file.
 struct Settings {
     ssid: String,
-    admin_token: Option<String>,
     interface: String,
 }
 
@@ -90,13 +91,22 @@ fn setting(cmdline: &str, key: &str) -> Option<String> {
     words.find_map(|word| word.strip_prefix(key)?.strip_prefix('=').map(|value| value.replace('"', "")))
 }
 
-fn settings(cmdline: &str) -> Settings {
+fn settings(cmdline: &str, seed: &Seed) -> Settings {
     let or = |key, default: &str| setting(cmdline, key).unwrap_or_else(|| default.into());
     Settings {
-        ssid: or("oasis.ssid", SSID),
-        admin_token: setting(cmdline, "oasis.admin_token"),
+        ssid: or("oasis.ssid", seed.ssid.as_deref().unwrap_or(SSID)),
         interface: or("oasis.interface", INTERFACE),
     }
+}
+
+/// the settings file that the image build put next to us. should it be
+/// missing or wrong, the device still comes up, with defaults.
+fn seed() -> Seed {
+    let parsed = fs::read_to_string(SETTINGS_FILE).map_err(|err| err.to_string());
+    parsed.and_then(|text| oasis_portal::parse_seed(&text)).unwrap_or_else(|err| {
+        eprintln!("oasis: {SETTINGS_FILE} ignored: {err}");
+        Seed::default()
+    })
 }
 
 /// brings the interface up with the portal's address. a wifi interface
@@ -169,7 +179,6 @@ fn config(settings: &Settings, https: bool) -> io::Result<Config> {
         origin: AP_IP.to_string(),
         aliases: vec![MDNS_HOST.into()],
         data_dir: MOUNT_POINT.into(),
-        admin_token: settings.admin_token.clone(),
         mac_of,
         stations,
         space,
@@ -216,7 +225,8 @@ fn start_services(settings: &Settings) -> io::Result<()> {
 
 fn run() -> Result<(), Box<dyn Error>> {
     init::mount_system()?;
-    let settings = settings(&fs::read_to_string(CMDLINE_FILE)?);
+    let seed = seed();
+    let settings = settings(&fs::read_to_string(CMDLINE_FILE)?, &seed);
     start_network(&settings)?;
     mount_storage()?;
     start_services(&settings)?;
@@ -228,7 +238,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         config.max_users,
         config.max_mailboxes
     );
-    let portal = Arc::new(Portal::new(config)?);
+    let portal = Arc::new(Portal::new(config, &seed)?);
     if let Some(tls) = tls {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, HTTPS_PORT))?;
         let names = vec![MDNS_HOST.to_string()];

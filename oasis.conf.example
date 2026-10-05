@@ -1,0 +1,25 @@
+# settings that are flashed along with the program. `make` copies this file
+# to `oasis.conf` once, which is yours to edit and is kept out of version
+# control. a setting is one line, and `\n` in a text is a line break.
+
+# name of the network and title of the portal
+ssid = OASIS
+
+# accounts that the device makes sure exist, with these passwords, every
+# time it starts. an admin can pin and delete posts and make other accounts
+# admins. the network is open, so a password that is typed in can be read by
+# anyone in radio range.
+[user]
+name = admin
+password = change-me
+admin = yes
+
+# threads that a fresh board starts with. `author` is the name that the
+# thread is signed with, an account from above or any other name. without
+# it the thread is signed oasis.
+[thread]
+topic = general
+author = admin
+subject = welcome
+text = this is an offline community board.\nbe kind, and mind that posts are public.
+pinned = yes

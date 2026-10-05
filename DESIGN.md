@@ -61,11 +61,20 @@ pool of worker threads, one request per connection, bounded head and body
 sizes. the fixed pool bounds memory on the device. bodies are urlencoded
 forms and responses are hand written json, which avoids a json dependency.
 
+browsers open connections ahead of time and leave them unused. a worker
+that waited on such a connection would be lost to every other client for
+the length of the read timeout. so `serve` in `lib.rs` accepts connections
+itself, keeps up to six that have sent nothing, and hands each to a worker
+once its request starts to arrive. std has no `poll`, so it looks at them
+every 10 ms. a connection that stays silent for five seconds is closed, and
+so is the oldest one when a seventh arrives.
+
 the UI is a single `index.html` with inline css and js, embedded in the
 binary, so a page load is one request.
 
 clients call `GET /api/poll` every two seconds. that one request returns
-new chat messages, the peer list, and pending signals.
+new chat messages, the peer list, pending signals, and the thread count of
+each topic.
 
 ## storage
 
@@ -83,6 +92,13 @@ subject.
   marker and keeping the records of that thread. this is the one place where
   the device filters. it sends at most 16KB per request and the id to
   continue after
+- a page of threads comes with the number of replies of each thread, a u16
+  per record. `Store::count` reads the reply log for that, from where the
+  replies of the oldest thread on the page start, or only the segments
+  that the index names. nothing is kept in RAM, so the cost is flash reads
+  on a request that happens when someone opens a topic
+- the number of threads of each topic is known without reading anything
+  and goes out with the poll, for the topic list
 - pinned thread ids (at most 8 per topic) are kept in a `pinned` file and
   sent with every thread page. the client fetches pinned threads that live
   on older pages by asking for the page that holds them
@@ -156,10 +172,38 @@ an optional description that others see in its profile.
   account id and password hash under a secret created on first boot. it
   needs no storage, survives reboots, and stops working when the password
   changes. the page keeps it in `localStorage` and sends it with requests
-- at most 100 accounts are kept. the oldest one makes room for a new one
+- at most 100 accounts are kept. the oldest one that is no admin makes
+  room for a new one
+- an account can be an admin, which the last field of its line in the
+  `users` file marks. `is_admin` in `routes.rs` reads that bit off the
+  session of a request, so there is no separate admin login. `POST
+  /api/admin` lets an admin set or clear the bit of another account. the
+  poll tells a client whether it is one, and the page then draws the pin
+  and delete buttons and colors the account button
 
 the network is open and unencrypted, so passwords and tokens can be read
 by anyone in radio range. accounts keep honest people apart, no more.
+
+## settings
+
+`oasis.conf` is a small file of `key = value` lines and `[user]` and
+`[thread]` sections, read by `seed.rs` without a dependency. it reaches a
+device with the program: the firmware compiles it in (`include_str!`), the
+raspberry pi image carries it in the initramfs, and the host binary reads
+the file that `OASIS_CONFIG` names.
+
+- `make` runs `oasis-host --check` on it before building for a device. a
+  device that meets a file it cannot read logs that and starts with
+  defaults, since refusing to start would leave nothing to connect to
+- its accounts are applied at every start (`Users::build_in_all`): made if
+  missing, and given the password and description of the file. the table
+  is only written when that changed something. an account that the file
+  makes an admin cannot lose the bit through `/api/admin`
+- its threads are started once (`Portal::start_threads`). a `seeded` file
+  in the data directory remembers that, so a thread that was deleted or
+  evicted does not come back
+- the network name is needed before the portal exists, so the platforms
+  read it from the parsed file themselves
 
 ## mail
 
@@ -256,8 +300,7 @@ arrow in the header, and typed or bookmarked addresses therefore all go
 through the same code. the arrow uses `history.back()` when the current
 place was reached from inside the page, and otherwise goes one level up, so
 that it never leaves the oasis. sign up and the profile form are the
-`account` view of the main page. `#admin` is not a place: it switches the
-admin token field on for the visit and continues to the board.
+`account` view of the main page.
 
 ## writing
 
@@ -361,9 +404,10 @@ the limits follow the size of the data partition: half of it for the board,
 a quarter for mail at 64KB per mailbox, and 10000 accounts. the rest covers
 the block rounding of ext4, whose inodes are sized for one file per 4KB.
 
-settings are words on the kernel command line (`cmdline.txt`), which can be
-edited on the card without a rebuild: `oasis.ssid`, `oasis.admin_token`,
-and `oasis.interface`. an interface that is not wifi, such as `eth0`, gets
+the settings file is `/oasis.conf` in the initramfs. two settings are also
+words on the kernel command line (`cmdline.txt`), which can be edited on
+the card without a rebuild: `oasis.ssid`, which goes before the file, and
+`oasis.interface`. an interface that is not wifi, such as `eth0`, gets
 the address and the services without an access point. the qemu test uses
 `lo`, since qemu emulates neither the wifi chip nor the ethernet port.
 
@@ -375,6 +419,7 @@ the numbers of the ESP32. the raspberry pi has its own, see above.
 |-------------------------|--------------|
 | wifi clients            | 10           |
 | http workers            | 4            |
+| idle http connections   | 6            |
 | chat history            | 50 messages  |
 | chat message            | 280 bytes    |
 | board post              | 2000 bytes   |

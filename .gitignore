@@ -3,6 +3,7 @@ target/
 .cache/
 .esp-env.sh
 firmware/tls/
+oasis.conf
 data/
 backup-*.bin
 __pycache__/

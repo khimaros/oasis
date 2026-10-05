@@ -18,10 +18,12 @@ import urllib.parse
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BINARY = os.environ.get("OASIS_HOST_BIN", ROOT / "target" / "debug" / "oasis-host")
-ADMIN_TOKEN = "sesame"
+# the built in admin account, and the settings file that makes it
+ADMIN_USER, ADMIN_PASSWORD = "admin", "sesame"
+CONFIG = f"[user]\nname = {ADMIN_USER}\npassword = {ADMIN_PASSWORD}\nadmin = yes\n"
 ALIAS = "oasis.local"
 # loopback addresses standing in for separate client devices
-LOCAL, ADA, BOB = "127.0.0.1", "127.0.0.2", "127.0.0.3"
+LOCAL, ADA, BOB, ADMIN = "127.0.0.1", "127.0.0.2", "127.0.0.3", "127.0.0.4"
 TOPICS = ["general", "events", "marketplace", "lost", "intros"]
 MAX_PINS = 8
 MAX_EVENTS = 64
@@ -29,6 +31,10 @@ MAX_UNREAD_NAMES = 8
 EXCERPT_BYTES = 48
 DNS_IP = "192.168.71.1"
 STARTUP_SECS = 5
+# more than the host build has http workers
+IDLE_CONNECTIONS = 12
+# how long a request may take while those are open
+PROMPT_SECS = 1
 CLIENT_TIME = 1_800_000_000
 CHAT_CAPACITY = 50
 MAX_USERS = 100
@@ -81,14 +87,20 @@ def parse_records(data, first=None):
 
 def parse_page(data):
     """a segment as served: the id of its first record, the id of an older
-    segment or zero, the deleted and the pinned ids, then the records."""
+    segment or zero, the deleted and the pinned ids, a count per record for
+    logs that count something, then the records."""
     first, older, deleted_count = struct.unpack_from("<IIH", data)
     offset = 10
     deleted = struct.unpack_from(f"<{deleted_count}I", data, offset)
     offset += 4 * deleted_count
     (pinned_count,) = struct.unpack_from("<H", data, offset)
     pinned = struct.unpack_from(f"<{pinned_count}I", data, offset + 2)
-    entries = parse_records(data[offset + 2 + 4 * pinned_count :], first)
+    offset += 2 + 4 * pinned_count
+    (counted,) = struct.unpack_from("<H", data, offset)
+    counts = struct.unpack_from(f"<{counted}H", data, offset + 2)
+    entries = parse_records(data[offset + 2 + 2 * counted :], first)
+    for entry, count in zip(entries, counts, strict=False):
+        entry["count"] = count
     kept = [entry for entry in entries if entry["id"] not in deleted]
     return {"older": older or None, "pinned": list(pinned), "entries": kept}
 
@@ -96,16 +108,19 @@ def parse_page(data):
 class Server:
     """a portal process with its own data directory and ports."""
 
-    def __init__(self, data_dir, **env):
+    def __init__(self, data_dir, config=CONFIG, **env):
         self.http_port = free_port(socket.SOCK_STREAM)
         self.dns_port = free_port(socket.SOCK_DGRAM)
         self.origin = f"127.0.0.1:{self.http_port}"
+        # stands in for the settings file that is flashed with the device
+        self.config_file = data_dir / "oasis.conf"
+        self.config_file.write_text(config)
         self.env = {
             "OASIS_HTTP_ADDR": self.origin,
             "OASIS_DNS_ADDR": f"127.0.0.1:{self.dns_port}",
             "OASIS_DNS_IP": DNS_IP,
             "OASIS_DATA_DIR": str(data_dir),
-            "OASIS_ADMIN_TOKEN": ADMIN_TOKEN,
+            "OASIS_CONFIG": str(self.config_file),
             "OASIS_ALIASES": ALIAS,
             "OASIS_CHAT_INTERVAL_MS": "0",
             "OASIS_BOARD_INTERVAL_MS": "0",
@@ -130,8 +145,11 @@ class Server:
         self.process.kill()
         self.process.wait()
 
-    def restart(self):
+    def restart(self, config=None):
+        """starts over, as after a power cycle, or after flashing `config`."""
         self.stop()
+        if config is not None:
+            self.config_file.write_text(config)
         self.start()
 
     def request(self, method, path, params=None, host=None, source=LOCAL, raw=False):
@@ -177,6 +195,12 @@ class Server:
     def profile(self, source, **params):
         return self.authenticate("/api/profile", source, **params)
 
+    def admin(self, path, **params):
+        """posts as the built in admin, logging it in first."""
+        if ADMIN not in self.sessions:
+            assert self.login(ADMIN, ADMIN_USER, ADMIN_PASSWORD) == 200
+        return self.post(path, source=ADMIN, **params)
+
     def dns(self, name, qtype):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(2)
@@ -207,7 +231,8 @@ class Server:
         threads = []
         for entry in page["entries"]:
             subject, _, text = entry["text"].partition("\n")
-            threads.append({**entry, "marker": entry["ref"], "subject": subject, "text": text})
+            thread = {"marker": entry["ref"], "subject": subject, "text": text, "replies": entry["count"]}
+            threads.append({**entry, **thread})
         return {"older": page["older"], "pinned": page["pinned"], "threads": threads}
 
     def subjects(self, topic="general", at=None):
@@ -232,11 +257,12 @@ class Server:
 
 class PortalTest(unittest.TestCase):
     ENV: typing.ClassVar = {}
+    CONFIG = CONFIG
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.data_dir = pathlib.Path(self.tmp.name)
-        self.server = Server(self.data_dir, **self.ENV)
+        self.server = Server(self.data_dir, self.CONFIG, **self.ENV)
 
     def tearDown(self):
         self.server.stop()
@@ -396,6 +422,21 @@ class CaptiveTest(PortalTest):
     def test_malformed_and_oversized_requests_are_rejected(self):
         status, _, _ = self.server.request("POST", "/api/chat", {"text": "x" * 20000})
         self.assertEqual(status, 400)
+
+    def test_idle_connections_do_not_delay_requests(self):
+        """browsers open connections ahead of time and leave them unused."""
+        address = ("127.0.0.1", self.server.http_port)
+        idle = [socket.create_connection(address) for _ in range(IDLE_CONNECTIONS)]
+        started = time.monotonic()
+        status = self.server.request("GET", "/")[0]
+        self.assertEqual(status, 200)
+        self.assertLess(time.monotonic() - started, PROMPT_SECS)
+        # the latest of them is used after all, as a browser does
+        time.sleep(PROMPT_SECS)
+        idle[-1].sendall(f"GET / HTTP/1.1\r\nHost: {self.server.origin}\r\n\r\n".encode())
+        self.assertTrue(idle[-1].makefile("rb").readline().startswith(b"HTTP/1.1 200"))
+        for sock in idle:
+            sock.close()
 
     def test_dns_resolves_every_name_to_the_portal(self):
         for name in ("example.com", "connectivitycheck.gstatic.com", "a.b.c.d.test"):
@@ -646,8 +687,10 @@ class AccountTest(PortalTest):
         self.server.register(ADA, "ada", password="correct horse")
         self.server.register(BOB, "bob", password="correct horse")
         lines = (self.data_dir / "users").read_text().splitlines()
-        rows = [line.split("\t") for line in lines]
-        for _, _, salt, stored, _ in rows:
+        # id, name, salt, hash, description, and a mark for admins
+        rows = [row for row in (line.split("\t") for line in lines) if row[1] != ADMIN_USER]
+        self.assertEqual([row[5] for row in rows], ["", ""])
+        for _, _, salt, stored, _, _ in rows:
             expected = hashlib.pbkdf2_hmac("sha256", b"correct horse", salt.encode(), PBKDF2_ROUNDS)
             self.assertEqual(stored, expected.hex())
         self.assertNotEqual(rows[0][3], rows[1][3], "equal passwords get different hashes")
@@ -688,7 +731,7 @@ class AccountTest(PortalTest):
         self.server.register(ADA, "ada", description="gardener, beekeeper")
         self.assertEqual(self.server.get("/api/poll", source=ADA)["description"], "gardener, beekeeper")
         info = self.server.get("/api/user", source=BOB, name="ADA")
-        self.assertEqual(info, {"name": "ada", "description": "gardener, beekeeper"})
+        self.assertEqual(info, {"name": "ada", "description": "gardener, beekeeper", "admin": False})
         self.server.profile(ADA, username="ada", description="retired")
         self.server.restart()
         self.assertEqual(self.server.get("/api/user", name="ada")["description"], "retired")
@@ -697,10 +740,12 @@ class AccountTest(PortalTest):
         self.assertEqual(self.server.get("/api/poll")["chat"][0]["name"], "ada")
 
     def test_oldest_accounts_are_evicted_when_the_table_is_full(self):
-        for index in range(MAX_USERS + 1):
+        # the admin account takes one place and is never the one to go
+        for index in range(MAX_USERS):
             self.assertEqual(self.server.register(f"127.0.1.{index + 1}", f"user{index}"), 200)
         self.assertFalse(self.poll("127.0.1.1")[1])
         self.assertEqual(self.poll("127.0.1.2"), ("user1", True))
+        self.assertEqual(self.server.login(ADMIN, ADMIN_USER, ADMIN_PASSWORD), 200)
         self.assertEqual(self.server.register(ADA, "user0"), 200, "evicted name is free again")
 
 
@@ -867,7 +912,8 @@ class StatusTest(PortalTest):
         self.assertEqual(
             limits, {"accounts": MAX_USERS, "mailboxes": MAX_MAILBOXES, "chat messages": CHAT_CAPACITY}
         )
-        self.assertTrue(all(row["count"] == 0 and row["used"] == 0 for row in empty.values()))
+        counts = {name: row["count"] for name, row in empty.items()}
+        self.assertEqual(counts, {**dict.fromkeys(empty, 0), "accounts": 1}, "only the admin account")
         self.server.register(ADA, "ada")
         self.server.post("/api/mail", source=ADA, to="ada", text="note to self")
         self.server.post("/api/chat", text="one")
@@ -876,10 +922,10 @@ class StatusTest(PortalTest):
         self.server.thread("events are separate", "text", topic="events")
         for index in range(3):
             self.server.reply(thread, f"reply {index}")
-        self.server.post("/api/delete", topic="general", log="replies", id=1, token=ADMIN_TOKEN)
+        self.server.admin("/api/delete", topic="general", log="replies", id=1)
         stored = self.stored()
         counts = {name: row["count"] for name, row in stored.items()}
-        expected = {"accounts": 1, "mailboxes": 1, "chat messages": 2, "threads": 2, "replies": 2}
+        expected = {"accounts": 2, "mailboxes": 1, "chat messages": 2, "threads": 2, "replies": 2}
         self.assertEqual(counts, expected)
         for name in ("threads", "replies"):
             self.assertTrue(stored[name]["bytes"])
@@ -1167,6 +1213,24 @@ class LongThreadTest(PortalTest):
         self.assertGreater(requests, 1, "a long thread takes several requests")
         self.assertEqual(len(self.server.replies(quiet)[0]), 5)
 
+    def test_threads_are_listed_with_their_reply_counts(self):
+        ids = [self.server.thread(subject)[1]["id"] for subject in ("busy", "quiet", "silent")]
+        busy, quiet, _ = ids
+        made = [self.server.reply(busy, f"reply {index} {'x' * 100}")[1]["id"] for index in range(120)]
+        self.server.reply(quiet, "one")
+        self.server.admin("/api/delete", topic="general", log="replies", id=made[0])
+        self.server.thread("elsewhere", topic="events")
+
+        def counts():
+            listed = self.server.threads()["threads"]
+            return {thread["subject"]: thread["replies"] for thread in listed if thread["id"] in ids}
+
+        expected = {"busy": 119, "quiet": 1, "silent": 0}
+        self.assertEqual(counts(), expected, "a deleted reply is not counted")
+        self.server.restart()
+        self.assertEqual(counts(), expected)
+        self.assertEqual(self.server.threads("events")["threads"][-1]["replies"], 0, "counts are per topic")
+
 
 class IndexedThreadTest(LongThreadTest):
     """devices with a large reply log keep an index of the segments that
@@ -1255,7 +1319,8 @@ class ScaledLimitsTest(PortalTest):
     def test_account_and_mailbox_limits_follow_the_configuration(self):
         stored = {row["name"]: row["max"] for row in self.server.get("/api/status")["stored"]}
         self.assertEqual((stored["accounts"], stored["mailboxes"]), (self.USERS, self.MAILBOXES))
-        for index in range(self.USERS + 1):
+        # the admin account takes one of the places
+        for index in range(self.USERS):
             self.assertEqual(self.server.register(f"127.0.1.{index + 1}", f"user{index}"), 200)
         self.assertEqual(self.server.login(ADA, "user0"), 403, "the oldest account made room")
         self.assertEqual(self.server.login(ADA, "user1"), 200)
@@ -1276,12 +1341,76 @@ class ScaledLimitsTest(PortalTest):
 
 class AdminTest(PortalTest):
     def admin(self, path, **params):
-        return self.server.post(path, topic="general", token=ADMIN_TOKEN, **params)
+        return self.server.admin(path, topic="general", **params)
+
+    def is_admin(self, source):
+        return self.server.get("/api/poll", source=source)["admin"]
+
+    def test_the_built_in_admin_logs_in_like_any_account(self):
+        self.assertEqual(self.server.login(ADMIN, ADMIN_USER, "wrong-password"), 403)
+        self.assertEqual(self.server.login(ADMIN, ADMIN_USER, ADMIN_PASSWORD), 200)
+        self.assertTrue(self.is_admin(ADMIN))
+        self.assertFalse(self.is_admin(LOCAL), "a guest")
+        self.server.register(ADA, "ada")
+        self.assertFalse(self.is_admin(ADA), "an ordinary account")
+        self.assertEqual(self.server.profile(ADMIN, username=ADMIN_USER, description="keeper"), 200)
+        self.assertTrue(self.server.get("/api/user", name=ADMIN_USER)["admin"])
+
+    def test_the_admin_password_follows_the_configuration(self):
+        self.server.login(ADMIN, ADMIN_USER, ADMIN_PASSWORD)
+        self.server.restart(CONFIG.replace(ADMIN_PASSWORD, "another-one"))
+        self.assertFalse(self.is_admin(ADMIN), "the old session ended with the old password")
+        self.assertEqual(self.server.login(ADMIN, ADMIN_USER, ADMIN_PASSWORD), 403)
+        self.assertEqual(self.server.login(ADMIN, ADMIN_USER, "another-one"), 200)
+
+    def test_admins_make_and_unmake_other_admins(self):
+        self.server.register(ADA, "ada")
+        self.server.register(BOB, "bob")
+        thread = self.server.thread()[1]["id"]
+        grant = {"username": "ada", "admin": 1}
+        self.assertEqual(self.server.post("/api/admin", source=BOB, **grant)[0], 403)
+        self.assertEqual(self.server.post("/api/admin", source=ADA, **grant)[0], 403, "not by oneself")
+        self.assertEqual(self.server.admin("/api/admin", username="nobody", admin=1)[0], 404)
+        self.assertEqual(self.server.admin("/api/admin", **grant)[0], 200)
+        self.assertTrue(self.is_admin(ADA))
+        self.assertTrue(self.server.get("/api/user", name="ada")["admin"])
+        self.assertFalse(self.server.get("/api/user", name="bob")["admin"])
+        self.server.restart()
+        pin = {"source": ADA, "topic": "general", "id": thread}
+        self.assertEqual(self.server.post("/api/pin", pinned=1, **pin)[0], 200)
+        self.assertEqual(self.server.post("/api/admin", source=ADA, username="bob", admin=1)[0], 200)
+        self.assertEqual(self.server.post("/api/admin", source=BOB, username="ada", admin=0)[0], 200)
+        self.assertFalse(self.is_admin(ADA))
+        self.assertEqual(self.server.post("/api/pin", pinned=0, **pin)[0], 403)
+        revoke = self.server.post("/api/admin", source=BOB, username=ADMIN_USER, admin=0)
+        self.assertEqual(revoke[0], 409, "the built in admin stays")
+
+    def test_topics_tell_how_many_threads_they_hold(self):
+        def counts():
+            return self.server.get("/api/poll")["threads"]
+
+        self.assertEqual(counts(), dict.fromkeys(TOPICS, 0))
+        first = self.server.thread("one")[1]["id"]
+        self.server.thread("two")
+        self.server.thread("elsewhere", topic="events")
+        self.assertEqual(counts(), {**dict.fromkeys(TOPICS, 0), "general": 2, "events": 1})
+        self.admin("/api/delete", id=first)
+        self.server.restart()
+        self.assertEqual(counts(), {**dict.fromkeys(TOPICS, 0), "general": 1, "events": 1})
+
+    def test_only_admins_delete_even_what_others_wrote_themselves(self):
+        self.server.register(ADA, "ada")
+        thread = self.server.thread("mine", source=ADA)[1]["id"]
+        reply = self.server.reply(thread, "also mine", source=ADA)[1]["id"]
+        self.assertEqual(self.server.post("/api/delete", source=ADA, topic="general", id=thread)[0], 403)
+        own_reply = {"source": ADA, "topic": "general", "log": "replies", "id": reply}
+        self.assertEqual(self.server.post("/api/delete", **own_reply)[0], 403)
+        self.assertEqual(len(self.server.threads()["threads"]), 1)
 
     def test_admin_deletes_threads_and_replies(self):
         keep = self.server.thread("keep")[1]["id"]
         spam = self.server.thread("spam")[1]["id"]
-        self.assertEqual(self.server.post("/api/delete", topic="general", id=spam)[0], 403)
+        self.assertEqual(self.server.post("/api/delete", source=BOB, topic="general", id=spam)[0], 403)
         self.assertEqual(self.admin("/api/delete", id=spam), (200, {"deleted": True}))
         self.assertEqual(self.admin("/api/delete", id=spam), (200, {"deleted": False}))
         self.server.reply(keep, "fine")
@@ -1318,7 +1447,7 @@ class PinnedPageTest(PortalTest):
 
     def test_a_pinned_thread_can_be_fetched_from_an_older_page(self):
         pinned = self.server.thread("rules")[1]["id"]
-        self.server.post("/api/pin", topic="general", token=ADMIN_TOKEN, id=pinned, pinned=1)
+        self.server.admin("/api/pin", topic="general", id=pinned, pinned=1)
         for index in range(20):
             self.server.thread(f"thread {index:02}", "x" * 40)
         newest = self.server.threads()
@@ -1329,18 +1458,102 @@ class PinnedPageTest(PortalTest):
         self.assertIn(later, [thread["id"] for thread in self.server.threads(at=later)["threads"]])
 
 
-class NoAdminTest(PortalTest):
-    def setUp(self):
-        super().setUp()
-        self.server.stop()
-        del self.server.env["OASIS_ADMIN_TOKEN"]
-        self.server.start()
+class ConfigTest(PortalTest):
+    """the settings file names the network, makes accounts, and starts
+    threads on a fresh board."""
 
-    def test_admin_is_disabled_without_a_token(self):
-        self.assertFalse(self.server.get("/api/poll")["admin"])
+    CONFIG = """\
+# a comment
+ssid = base camp
+
+[user]
+name = admin
+password = sesame
+admin = yes
+
+[user]
+name = ranger
+password = hunter22
+description = knows the trails
+
+[thread]
+topic = general
+subject = welcome
+text = be kind.\\nposts are public.
+author = ranger
+pinned = yes
+
+[thread]
+topic = events
+subject = campfire
+text = every night
+"""
+
+    def test_the_network_name_is_the_title(self):
+        self.assertEqual(self.server.get("/api/poll")["title"], "base camp")
+
+    def test_accounts_are_made_and_follow_the_file(self):
+        self.assertEqual(self.server.login(ADA, "ranger", "hunter22"), 200)
+        state = self.server.get("/api/poll", source=ADA)
+        self.assertEqual((state["name"], state["admin"]), ("ranger", False))
+        info = self.server.get("/api/user", name="ranger")
+        self.assertEqual(info["description"], "knows the trails")
+        self.assertEqual(self.server.login(ADMIN, ADMIN_USER, ADMIN_PASSWORD), 200)
+        self.assertTrue(self.server.get("/api/poll", source=ADMIN)["admin"])
+        self.server.restart(self.CONFIG.replace("hunter22", "new-secret"))
+        self.assertEqual(self.server.login(ADA, "ranger", "hunter22"), 403)
+        self.assertEqual(self.server.login(ADA, "ranger", "new-secret"), 200)
+
+    def test_threads_are_started_once(self):
+        general = self.server.threads()
+        (welcome,) = general["threads"]
+        self.assertEqual(
+            (welcome["subject"], welcome["text"], welcome["name"]),
+            ("welcome", "be kind.\nposts are public.", "ranger"),
+        )
+        self.assertEqual(general["pinned"], [welcome["id"]])
+        (campfire,) = self.server.threads("events")["threads"]
+        self.assertEqual((campfire["subject"], campfire["name"]), ("campfire", "oasis"))
+        self.assertEqual(self.server.threads("events")["pinned"], [])
+        self.server.admin("/api/delete", topic="events", id=campfire["id"])
+        self.server.restart()
+        self.assertEqual(len(self.server.threads()["threads"]), 1, "no second welcome")
+        self.assertEqual(self.server.threads("events")["threads"], [], "a deleted thread stays deleted")
+
+    def test_a_broken_file_is_refused_with_its_line(self):
+        def check(broken):
+            """the outcome of `oasis-host --check`, as the build runs it."""
+            self.server.config_file.write_text(broken)
+            command = [BINARY, "--check", self.server.config_file]
+            return subprocess.run(command, capture_output=True, text=True, timeout=5, check=False)
+
+        for broken, line in (("ssid = x\ncolor = red\n", 2), ("[user]\nname = ada\n\n[nothing]\n", 4)):
+            run = check(broken)
+            self.assertNotEqual(run.returncode, 0)
+            self.assertIn(f"line {line}", run.stderr)
+        for broken in ("[user]\nname = ada\n", "[thread]\ntopic = nowhere\nsubject = x\ntext = y\n"):
+            self.assertNotEqual(check(broken).returncode, 0, broken)
+        self.assertEqual(check(self.CONFIG).returncode, 0)
+        self.server.stop()
+        self.assertNotEqual(self.server.process.returncode, 0)
+        self.server.config_file.write_text("color = red\n")
+        with self.assertRaises(RuntimeError, msg="the portal does not start on a broken file"):
+            self.server.start()
+        self.server.restart(self.CONFIG)
+
+
+class NoAdminTest(PortalTest):
+    CONFIG = ""
+
+    def test_nobody_administers_without_a_built_in_admin(self):
+        self.assertEqual(self.server.login(ADMIN, ADMIN_USER, ADMIN_PASSWORD), 403)
+        self.server.register(ADA, "ada")
+        self.assertFalse(self.server.get("/api/poll", source=ADA)["admin"])
         thread = self.server.thread()[1]["id"]
-        self.assertEqual(self.server.post("/api/pin", topic="general", id=thread, pinned=1, token="")[0], 403)
-        self.assertEqual(self.server.post("/api/delete", topic="general", id=thread, token="")[0], 403)
+        post = {"source": ADA, "topic": "general", "id": thread}
+        self.assertEqual(self.server.post("/api/pin", pinned=1, **post)[0], 403)
+        self.assertEqual(self.server.post("/api/delete", **post)[0], 403)
+        self.assertEqual(self.server.post("/api/admin", source=ADA, username="ada", admin=1)[0], 403)
 
 
 class SignalTest(PortalTest):

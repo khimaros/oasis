@@ -14,6 +14,7 @@ pub mod mail;
 pub mod mdns;
 pub mod peers;
 mod routes;
+pub mod seed;
 pub mod sni;
 pub mod store;
 pub mod text;
@@ -24,11 +25,13 @@ use chat::Chat;
 use events::Events;
 use mail::Mail;
 use peers::Peers;
+pub use seed::Seed;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{self, BufWriter, Read, Write};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -37,7 +40,11 @@ use users::{User, Users, default_name};
 
 pub(crate) const CHAT_CAPACITY: usize = 50;
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
-const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+/// connections that have been accepted and have not sent anything yet.
+/// with the workers and the listeners they fit the sockets of the ESP32
+const MAX_WAITING: usize = 6;
+/// how often the waiting connections are checked for a request
+const DISPATCH_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_DRAIN_BYTES: u64 = 256 * 1024;
 /// 2026-01-01. client clocks earlier than this are considered unset.
 const MIN_CLOCK: u64 = 1_767_225_600;
@@ -53,6 +60,18 @@ const TOPICS: [&str; 5] = ["general", "events", "marketplace", "lost", "intros"]
 const LEGACY_DIRS: [&str; 7] = ["news", "board", "general", "events", "marketplace", "lost", "intros"];
 /// holds the logs of every topic
 const TOPICS_DIR: &str = "topics";
+/// present once the threads of the settings file were started
+const SEEDED_FILE: &str = "seeded";
+
+/// reads a settings file, see `seed.rs`. the error names what is wrong.
+pub fn parse_seed(text: &str) -> Result<Seed, String> {
+    seed::parse(text, &TOPICS)
+}
+
+/// a connection and the address of its client
+type Client = (TcpStream, IpAddr);
+/// a connection without a request so far, and since when
+type Waiting = (TcpStream, IpAddr, Instant);
 
 /// bytes in use on a partition of the platform.
 pub struct Space {
@@ -70,8 +89,6 @@ pub struct Config {
     /// name. these are served directly and shown to users ahead of `origin`.
     pub aliases: Vec<String>,
     pub data_dir: PathBuf,
-    /// admin features are disabled when unset
-    pub admin_token: Option<String>,
     /// hardware address of the client at an ip address, when the platform
     /// can tell. identifies devices for names and accounts.
     pub mac_of: fn(IpAddr) -> Option<[u8; 6]>,
@@ -139,7 +156,9 @@ pub(crate) fn display_name(device: Option<u64>, user: Option<&User>) -> String {
 }
 
 impl Portal {
-    pub fn new(config: Config) -> io::Result<Portal> {
+    /// opens the stores under `config.data_dir` and applies the settings
+    /// file: its accounts every time, its threads once.
+    pub fn new(config: Config, seed: &Seed) -> io::Result<Portal> {
         LEGACY_DIRS.iter().for_each(|dir| drop(fs::remove_dir_all(config.data_dir.join(dir))));
         let share = config.board_bytes / TOPICS.len() as u64;
         let open = |topic: &'static str| {
@@ -148,12 +167,14 @@ impl Portal {
             Ok((topic, Mutex::new(opened)))
         };
         let topics = TOPICS.into_iter().map(open).collect::<io::Result<Vec<_>>>()?;
-        Ok(Portal {
+        let mut users = Users::open(&config.data_dir, config.max_users)?;
+        users.build_in_all(&seed.users)?;
+        let portal = Portal {
             started: Instant::now(),
             boot_unix: Mutex::default(),
             chat: Mutex::new(Chat::new(CHAT_CAPACITY)),
             peers: Mutex::default(),
-            users: Mutex::new(Users::open(&config.data_dir, config.max_users)?),
+            users: Mutex::new(users),
             mail: Mutex::new(Mail::open(
                 config.data_dir.join(MAIL_DIR),
                 config.max_mailboxes,
@@ -165,7 +186,27 @@ impl Portal {
             posted: Mutex::default(),
             released: Mutex::default(),
             config,
-        })
+        };
+        portal.start_threads(&seed.threads).map(|()| portal)
+    }
+
+    /// starts the threads of the settings file on a board that has not had
+    /// them. a marker file remembers that, so that the ones that were
+    /// deleted or evicted since do not come back.
+    fn start_threads(&self, threads: &[seed::Thread]) -> io::Result<()> {
+        let marker = self.config.data_dir.join(SEEDED_FILE);
+        if marker.exists() {
+            return Ok(());
+        }
+        for thread in threads {
+            let Some(topic) = self.topic(&thread.topic) else { continue };
+            let mut topic = topic.lock().unwrap();
+            let id = topic.start(self.now(), &thread.author, &thread.subject, &thread.text)?;
+            if thread.pinned {
+                topic.pin(id, true)?;
+            }
+        }
+        fs::write(marker, "")
     }
 
     /// id of the device behind `ip`. None when its mac is unknown.
@@ -218,6 +259,13 @@ impl Portal {
         usages.fold(Default::default(), |(threads, replies), (t, r)| (threads.plus(t), replies.plus(r)))
     }
 
+    /// the json object of how many threads each topic holds.
+    pub(crate) fn thread_counts(&self) -> String {
+        let count =
+            |(name, topic): &(&str, Mutex<Topic>)| format!("\"{name}\":{}", topic.lock().unwrap().threads());
+        format!("{{{}}}", self.topics.iter().map(count).collect::<Vec<_>>().join(","))
+    }
+
     pub(crate) fn topic(&self, name: &str) -> Option<&Mutex<Topic>> {
         self.topics.iter().find(|(topic, _)| *topic == name).map(|(_, store)| store)
     }
@@ -251,6 +299,7 @@ impl Portal {
 }
 
 fn connection(portal: &Portal, stream: TcpStream, peer: IpAddr) -> io::Result<()> {
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     let mut out = BufWriter::new(&stream);
@@ -273,25 +322,65 @@ fn drain(stream: &TcpStream) -> io::Result<()> {
     io::copy(&mut Read::take(stream, MAX_DRAIN_BYTES), &mut io::sink()).map(drop)
 }
 
-fn worker(portal: &Portal, listener: &TcpListener) {
+fn worker(portal: &Portal, ready: &Mutex<Receiver<Client>>) {
     loop {
-        match listener.accept() {
-            Ok((stream, peer)) => drop(connection(portal, stream, peer.ip())),
-            Err(_) => thread::sleep(ACCEPT_BACKOFF),
+        let next = ready.lock().unwrap().recv();
+        let Ok((stream, peer)) = next else { return };
+        drop(connection(portal, stream, peer));
+    }
+}
+
+/// accepts what is pending. beyond `MAX_WAITING`, the connection that has
+/// waited for longest is closed.
+fn accept_pending(listener: &TcpListener, waiting: &mut VecDeque<Waiting>) {
+    while let Ok((stream, peer)) = listener.accept() {
+        if stream.set_nonblocking(true).is_err() {
+            continue;
+        }
+        if waiting.len() >= MAX_WAITING {
+            waiting.pop_front();
+        }
+        waiting.push_back((stream, peer.ip(), Instant::now()));
+    }
+}
+
+/// hands the connections that have sent something to a free worker, and
+/// closes those that hung up or stayed silent for too long.
+fn dispatch(waiting: &mut VecDeque<Waiting>, ready: &SyncSender<Client>) {
+    for _ in 0..waiting.len() {
+        let Some((stream, peer, since)) = waiting.pop_front() else { return };
+        match stream.peek(&mut [0]) {
+            Ok(0) => {}
+            Ok(_) => {
+                if let Err(TrySendError::Full((stream, peer))) = ready.try_send((stream, peer)) {
+                    waiting.push_back((stream, peer, since));
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock && since.elapsed() < IO_TIMEOUT => {
+                waiting.push_back((stream, peer, since));
+            }
+            Err(_) => {}
         }
     }
 }
 
 /// serves http forever from a fixed pool of worker threads, which bounds
-/// memory use on the device.
+/// memory use on the device. browsers open connections ahead of time and
+/// leave them unused, so a connection only gets a worker once its request
+/// starts to arrive.
 pub fn serve(portal: Arc<Portal>, listener: TcpListener) -> io::Result<()> {
-    let listener = Arc::new(listener);
-    let spawn = |index| {
-        let (portal, listener) = (portal.clone(), listener.clone());
+    listener.set_nonblocking(true)?;
+    let (ready, queue) = mpsc::sync_channel(0);
+    let queue = Arc::new(Mutex::new(queue));
+    for index in 0..portal.config.workers {
+        let (portal, queue) = (portal.clone(), queue.clone());
         let builder = thread::Builder::new().name(format!("http{index}"));
-        builder.stack_size(portal.config.worker_stack).spawn(move || worker(&portal, &listener))
-    };
-    let workers: io::Result<Vec<_>> = (0..portal.config.workers).map(spawn).collect();
-    workers?.into_iter().for_each(|handle| drop(handle.join()));
-    Ok(())
+        builder.stack_size(portal.config.worker_stack).spawn(move || worker(&portal, &queue))?;
+    }
+    let mut waiting = VecDeque::with_capacity(MAX_WAITING);
+    loop {
+        accept_pending(&listener, &mut waiting);
+        dispatch(&mut waiting, &ready);
+        thread::sleep(DISPATCH_INTERVAL);
+    }
 }

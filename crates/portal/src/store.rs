@@ -27,7 +27,6 @@ const LENGTH_BYTES: usize = 2;
 /// timestamp, reference, and name length
 const HEAD_BYTES: usize = 9;
 const REFERENCE_AT: usize = LENGTH_BYTES + 4;
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     pub id: u64,
@@ -45,6 +44,13 @@ pub struct Page {
     pub records: Vec<u8>,
     pub older: Option<u64>,
     pub deleted: Vec<u64>,
+}
+
+impl Page {
+    /// the reference of every record, in the order of their ids.
+    pub fn references(&self) -> Vec<u64> {
+        records(&self.records).map(reference).collect()
+    }
 }
 
 /// how much of something is in use.
@@ -377,6 +383,27 @@ impl Store {
             }
         }
         Ok((found, None))
+    }
+
+    /// how many entries from entry `from` on have each of the `wanted`
+    /// references that start at `first`. deleted entries are left out. reads
+    /// the segments that the index names, or all from `from` on without one.
+    pub fn count(&self, from: u64, first: u64, wanted: usize) -> io::Result<Vec<u16>> {
+        let (start, range) = (self.segments[self.segment_of(from)], first..first + wanted as u64);
+        let all: BTreeSet<u64> = match &self.index {
+            Some(index) => range.clone().filter_map(|wanted| index.get(&wanted)).flatten().copied().collect(),
+            None => self.segments.iter().copied().collect(),
+        };
+        let mut counts = vec![0u16; wanted];
+        for segment in all.range(start..) {
+            let data = read_or_empty(&self.path(*segment))?;
+            let kept = (*segment..).zip(records(&data)).filter(|(id, _)| !self.deleted.contains(id));
+            for reference in kept.map(|(_, record)| reference(record)).filter(|found| range.contains(found)) {
+                let count = &mut counts[(reference - first) as usize];
+                *count = count.saturating_add(1);
+            }
+        }
+        Ok(counts)
     }
 
     /// reads the segment that holds entry `at`, or the newest one. ids that

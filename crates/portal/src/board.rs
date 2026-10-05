@@ -74,10 +74,23 @@ impl Topic {
         self.pinned.iter().copied().filter(|thread| self.has_thread(*thread)).collect()
     }
 
-    /// the page of threads that holds thread `at`, or the newest page, and
-    /// the pinned threads of the topic.
-    pub fn page(&self, at: Option<u64>) -> io::Result<(Page, Vec<u64>)> {
-        Ok((self.threads.read(at)?, self.live_pins()))
+    /// the page of threads that holds thread `at`, or the newest page, the
+    /// pinned threads of the topic, and how many replies each thread of the
+    /// page has. the replies are counted from where those of the oldest
+    /// thread of the page start, which for the newest page is not far back.
+    pub fn page(&self, at: Option<u64>) -> io::Result<(Page, Vec<u64>, Vec<u16>)> {
+        let page = self.threads.read(at)?;
+        let markers = page.references();
+        let counts = match markers.first() {
+            Some(from) => self.replies.count(*from, page.first, markers.len())?,
+            None => Vec::new(),
+        };
+        Ok((page, self.live_pins(), counts))
+    }
+
+    /// number of threads, not counting the deleted ones.
+    pub fn threads(&self) -> u64 {
+        self.threads.usage().count
     }
 
     /// replies to `thread` that come after reply `after`, each preceded by

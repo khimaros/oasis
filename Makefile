@@ -3,6 +3,10 @@ MISE := mise exec --
 PORT ?= /dev/ttyUSB0
 BAUD ?= 921600
 FLASH_BYTES := 0x400000
+# not a pinned tool: only `make phone-wifi` uses it, on whatever phone is at hand
+ADB ?= adb
+# label of the user data in firmware/partitions.csv
+STORAGE_PARTITION := storage
 FIRMWARE := firmware/target/xtensa-esp32-espidf/release/oasis-firmware
 ESP_ENV := .esp-env.sh
 TLS_CERT := firmware/tls/cert.pem
@@ -15,11 +19,12 @@ RPI_OUT := target/rpi
 RPI_CACHE := .cache/rpi
 # megabytes of the data partition. the limits of the portal grow with it
 RPI_DATA_MB ?= 2048
-# the build time settings of the firmware, passed on the kernel command line
-RPI_SETTINGS := $(if $(OASIS_SSID),oasis.ssid="$(OASIS_SSID)") \
-	$(if $(OASIS_ADMIN_TOKEN),oasis.admin_token=$(OASIS_ADMIN_TOKEN))
+# the settings that are flashed with the program: the network name, the
+# accounts, and the first threads. see oasis.conf.example
+CONFIG := oasis.conf
+HOST := target/debug/oasis-host
 
-.PHONY: build setup host firmware rpi rpi-image flash monitor backup run test-e2e test-browser test-rpi precommit clean
+.PHONY: build setup host check-config firmware rpi rpi-image flash wipe flash-wipe phone-wifi monitor backup run test-e2e test-browser test-rpi precommit clean
 
 build: host firmware rpi
 
@@ -41,7 +46,16 @@ $(TLS_CERT):
 	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days $(TLS_DAYS) \
 		-subj "/CN=oasis" -keyout $(dir $(TLS_CERT))key.pem -out $(TLS_CERT)
 
-firmware: $(TLS_CERT)
+# created once per checkout, then yours to edit. it holds passwords, so it
+# stays out of version control
+$(CONFIG):
+	cp $(CONFIG).example $(CONFIG)
+
+# a device ignores a settings file that it cannot read, so refuse to build one in
+check-config: host $(CONFIG)
+	$(HOST) --check $(CONFIG)
+
+firmware: $(TLS_CERT) check-config
 	$(FIRMWARE_CARGO) build --release
 
 # static binary for the raspberry pi 4. the crypto library of its https
@@ -51,13 +65,29 @@ rpi:
 		$(MISE) cargo build --release -p oasis-rpi --target $(RPI_TARGET)
 
 # sd card image, written to $(RPI_OUT)/oasis-rpi4.img. needs mkfs.vfat,
-# mcopy, and mke2fs. e.g. `OASIS_SSID=camp RPI_DATA_MB=16000 make rpi-image`
-rpi-image: rpi $(TLS_CERT)
-	$(MISE) python tools/rpi_image.py --binary $(RPI_BINARY) --tls $(dir $(TLS_CERT)) \
-		--cache $(RPI_CACHE) --out $(RPI_OUT) --data-mb $(RPI_DATA_MB) --cmdline '$(strip $(RPI_SETTINGS))'
+# mcopy, and mke2fs. e.g. `RPI_DATA_MB=16000 make rpi-image`
+rpi-image: rpi $(TLS_CERT) check-config
+	$(MISE) python tools/rpi_image.py --binary $(RPI_BINARY) --config $(CONFIG) --tls $(dir $(TLS_CERT)) \
+		--cache $(RPI_CACHE) --out $(RPI_OUT) --data-mb $(RPI_DATA_MB)
 
 flash: firmware
 	$(MISE) espflash flash --port $(PORT) --baud $(BAUD) --partition-table firmware/partitions.csv $(FIRMWARE)
+
+# erases the user data of the attached board: accounts, board, and mail. the
+# board restarts, formats the partition, and applies the settings again
+wipe:
+	$(MISE) espflash erase-parts --port $(PORT) --non-interactive \
+		--partition-table firmware/partitions.csv $(STORAGE_PARTITION)
+
+# a board as new: the firmware first, so that it is the one to start on the
+# empty partition
+flash-wipe: flash wipe
+
+# brings the wifi of an android phone on usb back after its wifi stack shut
+# itself down, see docs/grapheneos-wifi.md. adb takes the phone and the
+# server from ANDROID_SERIAL and ANDROID_ADB_SERVER_PORT
+phone-wifi:
+	$(ADB) shell cmd wifi set-wifi-enabled enabled
 
 monitor:
 	$(MISE) espflash monitor --port $(PORT)
@@ -67,8 +97,8 @@ backup:
 	$(MISE) espflash read-flash --port $(PORT) --baud $(BAUD) 0 $(FLASH_BYTES) backup-$(shell date +%Y%m%d-%H%M%S).bin
 
 # serves the portal on http://127.0.0.1:8080/
-run: host
-	target/debug/oasis-host
+run: host $(CONFIG)
+	OASIS_CONFIG=$(CONFIG) $(HOST)
 
 test-e2e: host
 	$(MISE) python -m unittest discover -s tests/e2e -v
@@ -83,7 +113,7 @@ test-browser: host
 test-rpi: rpi-image
 	$(MISE) python -m unittest discover -s tests/rpi -v
 
-precommit: $(TLS_CERT)
+precommit: $(TLS_CERT) $(CONFIG)
 	$(MISE) cargo fmt --all --check
 	$(MISE) cargo clippy --all-targets -- -D warnings
 	cd firmware && $(MISE) cargo fmt --check

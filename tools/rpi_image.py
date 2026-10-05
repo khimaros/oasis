@@ -2,8 +2,8 @@
 
 the card has two partitions. the first is the FAT one that the pi boots from:
 its firmware, a stock raspberry pi kernel, and an initramfs. the initramfs
-holds the oasis binary as /init, the wifi driver modules, and the firmware of
-the wifi chip. the second partition is an empty ext4 for the data.
+holds the oasis binary as /init, the settings file, the wifi driver modules,
+and the firmware of the wifi chip. the second partition is an empty ext4 for the data.
 
 kernel, modules, and firmware are downloaded once into the cache directory.
 they are pinned by commit and checked against the hashes in `rpi.lock`.
@@ -57,6 +57,8 @@ CHIP_FIRMWARE = {
     "brcm/brcmfmac43455-sdio.txt": "brcm/brcmfmac43455-sdio.txt",
 }
 TLS_FILES = ["cert.pem", "key.pem"]
+# where the init looks for the settings file
+SETTINGS_FILE = "oasis.conf"
 CONFIG = f"""\
 arm_64bit=1
 kernel={KERNEL}
@@ -153,7 +155,7 @@ def module_files(cache):
     return {**files, "modules.dep": "".join(line + "\n" for line in kept).encode()}
 
 
-def initramfs(binary, tls_dir, cache):
+def initramfs(binary, config, tls_dir, cache):
     modules = {f"lib/{MODULES_DIR}/{path}": (MODE_FILE, data) for path, data in module_files(cache).items()}
     firmware = {
         f"lib/firmware/{path}": (MODE_FILE, fetch(f"{WIFI_FIRMWARE}/{source}", cache))
@@ -161,7 +163,8 @@ def initramfs(binary, tls_dir, cache):
     }
     tls = {f"tls/{name}": (MODE_FILE, (tls_dir / name).read_bytes()) for name in TLS_FILES}
     init = {"init": (MODE_EXEC, binary.read_bytes()), "sbin/modprobe": (MODE_LINK, b"/init")}
-    return cpio({**init, **modules, **firmware, **tls})
+    settings = {SETTINGS_FILE: (MODE_FILE, config.read_bytes())}
+    return cpio({**init, **settings, **modules, **firmware, **tls})
 
 
 def run(tool, *args):
@@ -212,6 +215,7 @@ def partition_table(partitions):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--binary", type=pathlib.Path, required=True, help="the oasis-rpi executable")
+    parser.add_argument("--config", type=pathlib.Path, required=True, help="the settings file")
     parser.add_argument("--tls", type=pathlib.Path, required=True, help="directory of cert.pem and key.pem")
     parser.add_argument("--cache", type=pathlib.Path, required=True, help="keeps downloads")
     parser.add_argument(
@@ -223,7 +227,7 @@ def main():
     args.cache.mkdir(parents=True, exist_ok=True)
     args.out.mkdir(parents=True, exist_ok=True)
     boot = {name: fetch(f"{FIRMWARE}/boot/{name}", args.cache) for name in BOOT_FILES}
-    boot[INITRAMFS] = initramfs(args.binary, args.tls, args.cache)
+    boot[INITRAMFS] = initramfs(args.binary, args.config, args.tls, args.cache)
     boot["config.txt"] = CONFIG.encode()
     boot["cmdline.txt"] = f"{CMDLINE} {args.cmdline}".strip().encode() + b"\n"
     data_start, data_bytes = BOOT_START + BOOT_BYTES, args.data_mb * MEGABYTE

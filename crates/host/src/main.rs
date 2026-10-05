@@ -1,7 +1,8 @@
 //! runs the portal on a development host. configured through environment
 //! variables so that the end-to-end tests can shrink limits and pick ports.
+//! `OASIS_CONFIG` names the settings file that a device has flashed in.
 
-use oasis_portal::{Config, Portal, Space, dhcp, dns, mdns, sni};
+use oasis_portal::{Config, Portal, Seed, Space, dhcp, dns, mdns, sni};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
@@ -13,6 +14,8 @@ use std::thread;
 use std::time::Duration;
 
 const WORKER_STACK: usize = 256 * 1024;
+/// first argument of a run that only checks a settings file
+const CHECK: &str = "--check";
 /// size of the data partition on the device
 const STORAGE_BYTES: u64 = 0x270000;
 
@@ -53,11 +56,23 @@ fn space() -> Vec<Space> {
     vec![Space { name: "storage", used: dir_bytes(&dir), size: STORAGE_BYTES }]
 }
 
+/// the settings file at `path`, see `seed.rs` of the portal. empty without one.
+fn seed(path: Option<String>) -> io::Result<Seed> {
+    let text = path.as_ref().map(fs::read_to_string).transpose()?.unwrap_or_default();
+    let named = |err| io::Error::other(format!("{}: {err}", path.unwrap_or_default()));
+    oasis_portal::parse_seed(&text).map_err(named)
+}
+
 fn main() -> io::Result<()> {
+    // `oasis-host --check <file>` tells whether a device would accept the file
+    if let (Some(CHECK), path) = (env::args().nth(1).as_deref(), env::args().nth(2)) {
+        return seed(path).map(drop);
+    }
+    let seed = seed(env::var("OASIS_CONFIG").ok())?;
     let http_addr: String = var("OASIS_HTTP_ADDR", "127.0.0.1:8080".into());
     let dns_addr: String = var("OASIS_DNS_ADDR", "127.0.0.1:5353".into());
     let config = Config {
-        title: var("OASIS_TITLE", "oasis".into()),
+        title: seed.ssid.clone().unwrap_or_else(|| var("OASIS_TITLE", "oasis".into())),
         origin: var("OASIS_ORIGIN", http_addr.clone()),
         aliases: env::var("OASIS_ALIASES")
             .iter()
@@ -65,7 +80,6 @@ fn main() -> io::Result<()> {
             .map(String::from)
             .collect(),
         data_dir: var("OASIS_DATA_DIR", "data".into()),
-        admin_token: env::var("OASIS_ADMIN_TOKEN").ok(),
         mac_of,
         stations,
         space,
@@ -116,5 +130,5 @@ fn main() -> io::Result<()> {
     }
     let listener = TcpListener::bind(&http_addr)?;
     println!("oasis portal on http://{http_addr}/ dns on {dns_addr}");
-    oasis_portal::serve(Arc::new(Portal::new(config)?), listener)
+    oasis_portal::serve(Arc::new(Portal::new(config, &seed)?), listener)
 }
