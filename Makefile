@@ -2,17 +2,28 @@
 MISE := mise exec --
 PORT ?= /dev/ttyUSB0
 BAUD ?= 921600
-FLASH_BYTES := 0x400000
+# the chip of the board: esp32 or esp32s3
+BOARD ?= esp32
+# megabytes of its flash: 4, 8, or 16. the storage takes what the program
+# leaves, and the board grows with it
+FLASH_MB_esp32 := 4
+FLASH_MB_esp32s3 := 8
+FLASH_MB ?= $(FLASH_MB_$(BOARD))
+FLASH_BYTES := $(shell printf '0x%x' $$(($(FLASH_MB) * 1024 * 1024)))
+PARTITIONS := firmware/partitions-$(FLASH_MB)mb.csv
 # not a pinned tool: only `make phone-wifi` uses it, on whatever phone is at hand
 ADB ?= adb
-# label of the user data in firmware/partitions.csv
+# label of the user data in $(PARTITIONS)
 STORAGE_PARTITION := storage
-FIRMWARE := firmware/target/xtensa-esp32-espidf/release/oasis-firmware
+FIRMWARE_TARGET := xtensa-$(BOARD)-espidf
+FIRMWARE := firmware/target/$(FIRMWARE_TARGET)/release/oasis-firmware
 ESP_ENV := .esp-env.sh
 TLS_CERT := firmware/tls/cert.pem
 TLS_DAYS := 7300
-# the firmware directory selects the xtensa toolchain via rust-toolchain.toml
-FIRMWARE_CARGO := . ./$(ESP_ENV) && cd firmware && $(MISE) cargo
+# the firmware directory selects the xtensa toolchain via rust-toolchain.toml.
+# the chip and the flash size go before the defaults of firmware/.cargo
+FIRMWARE_CARGO := . ./$(ESP_ENV) && cd firmware && MCU=$(BOARD) \
+	ESP_IDF_SDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.$(FLASH_MB)mb' $(MISE) cargo
 RPI_TARGET := aarch64-unknown-linux-musl
 RPI_BINARY := target/$(RPI_TARGET)/release/oasis-rpi
 RPI_OUT := target/rpi
@@ -32,7 +43,7 @@ build: host firmware rpi
 setup:
 	mise trust
 	mise install
-	$(MISE) sh -c 'espup install --std --targets esp32 --toolchain-version $$ESP_RUST_VERSION --export-file $(ESP_ENV)'
+	$(MISE) sh -c 'espup install --std --targets esp32,esp32s3 --toolchain-version $$ESP_RUST_VERSION --export-file $(ESP_ENV)'
 
 host:
 	$(MISE) cargo build
@@ -56,7 +67,7 @@ check-config: host $(CONFIG)
 	$(HOST) --check $(CONFIG)
 
 firmware: $(TLS_CERT) check-config
-	$(FIRMWARE_CARGO) build --release
+	$(FIRMWARE_CARGO) build --release --target $(FIRMWARE_TARGET)
 
 # static binary for the raspberry pi 4. the crypto library of its https
 # listener has parts in C, which the host's clang compiles for arm
@@ -71,13 +82,13 @@ rpi-image: rpi $(TLS_CERT) check-config
 		--cache $(RPI_CACHE) --out $(RPI_OUT) --data-mb $(RPI_DATA_MB)
 
 flash: firmware
-	$(MISE) espflash flash --port $(PORT) --baud $(BAUD) --partition-table firmware/partitions.csv $(FIRMWARE)
+	$(MISE) espflash flash --port $(PORT) --baud $(BAUD) --partition-table $(PARTITIONS) $(FIRMWARE)
 
 # erases the user data of the attached board: accounts, board, and mail. the
 # board restarts, formats the partition, and applies the settings again
 wipe:
 	$(MISE) espflash erase-parts --port $(PORT) --non-interactive \
-		--partition-table firmware/partitions.csv $(STORAGE_PARTITION)
+		--partition-table $(PARTITIONS) $(STORAGE_PARTITION)
 
 # a board as new: the firmware first, so that it is the one to start on the
 # empty partition
@@ -89,8 +100,10 @@ flash-wipe: flash wipe
 phone-wifi:
 	$(ADB) shell cmd wifi set-wifi-enabled enabled
 
+# espflash connects through the bootloader and only restarts the board
+# afterwards when it is told not to wait for input
 monitor:
-	$(MISE) espflash monitor --port $(PORT)
+	$(MISE) espflash monitor --port $(PORT) --non-interactive
 
 # saves the full flash contents of the attached board before overwriting it
 backup:
@@ -117,7 +130,7 @@ precommit: $(TLS_CERT) $(CONFIG)
 	$(MISE) cargo fmt --all --check
 	$(MISE) cargo clippy --all-targets -- -D warnings
 	cd firmware && $(MISE) cargo fmt --check
-	$(FIRMWARE_CARGO) clippy --release -- -D warnings
+	$(FIRMWARE_CARGO) clippy --release --target $(FIRMWARE_TARGET) -- -D warnings
 	$(MISE) ruff check tests tools
 	$(MISE) ruff format --check tests tools
 

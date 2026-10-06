@@ -1,0 +1,6 @@
+# the 4MB layout with the storage grown to the end of an 8MB flash
+# name,   type, subtype,  offset,   size
+nvs,      data, nvs,      0x9000,   0x6000
+phy_init, data, phy,      0xf000,   0x1000
+factory,  app,  factory,  0x10000,  0x180000
+storage,  data, littlefs, 0x190000, 0x670000

@@ -48,13 +48,14 @@ const MDNS_HOST: &str = "oasis";
 const AP_NETIF_KEY: &CStr = c"WIFI_AP_DEF";
 const STORAGE_LABEL: &str = "storage";
 const MOUNT_POINT: &str = "/data";
-/// budget of the board. rounded up to littlefs blocks it takes about 1200KB
-/// of the 2496KB partition. mail takes up to 830KB and accounts 70KB, which
-/// leaves about 460KB for littlefs to copy on write. see the storage
+/// flash that the board leaves alone: mail takes up to 830KB and accounts
+/// 70KB, and littlefs copies on write into the rest. see the storage
 /// section of DESIGN.md
-const BOARD_BYTES: u64 = 1200 * 1000;
+const KEPT_BYTES: u64 = 324 * 4096;
 /// two 4096 byte littlefs blocks, minus the block pointers
 const SEGMENT_BYTES: u64 = 8000;
+/// what a full segment takes of the flash
+const SEGMENT_FLASH_BYTES: u64 = 2 * 4096;
 const MAX_USERS: usize = 100;
 /// a full mailbox is two littlefs blocks, 100 of them 800KB
 const MAX_MAILBOXES: usize = 100;
@@ -140,7 +141,13 @@ fn mac_of(ip: IpAddr) -> Option<[u8; 6]> {
     pairs.iter().find(|pair| pair.ip.addr == wanted).map(|pair| pair.mac)
 }
 
-fn config(ssid: &str) -> Config {
+/// budget of the board: the segments that fit into the storage partition
+/// next to what is kept from it. 1200KB of the 2496KB that a 4MB flash has
+fn board_bytes(storage: u64) -> u64 {
+    storage.saturating_sub(KEPT_BYTES) / SEGMENT_FLASH_BYTES * SEGMENT_BYTES
+}
+
+fn config(ssid: &str, storage: u64) -> Config {
     Config {
         title: ssid.into(),
         origin: AP_IP.to_string(),
@@ -153,7 +160,7 @@ fn config(ssid: &str) -> Config {
         verbose: true,
         workers: HTTP_WORKERS,
         worker_stack: HTTP_STACK,
-        board_bytes: BOARD_BYTES,
+        board_bytes: board_bytes(storage),
         segment_bytes: SEGMENT_BYTES,
         index_replies: false,
         max_users: MAX_USERS,
@@ -179,7 +186,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     space::measure_firmware();
     let storage = mount_storage()?;
     log::info!("storage: {:?}", storage.info()?);
-    let config = config(ssid);
+    let config = config(ssid, space::storage().ok_or("storage of unknown size")?.size);
+    log::info!("board: {} bytes", config.board_bytes);
     let names = config.aliases.clone();
     let portal = Arc::new(Portal::new(config, &seed)?);
     let dns_socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, DNS_PORT))?;

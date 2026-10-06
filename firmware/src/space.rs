@@ -29,7 +29,8 @@ pub fn measure_firmware() {
     }
 }
 
-fn storage() -> Option<Space> {
+/// the data partition, once it is mounted.
+pub fn storage() -> Option<Space> {
     let label = CString::new(crate::STORAGE_LABEL).ok()?;
     let (mut total, mut used) = (0usize, 0usize);
     esp!(unsafe { esp_littlefs_info(label.as_ptr(), &mut total, &mut used) }).ok()?;

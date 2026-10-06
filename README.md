@@ -29,6 +29,10 @@ a classic ESP32 with 4MB of flash (developed on an ESP32-D0WD-V3 dev board
 with a CH340 usb serial adapter). about 2MB of flash holds the mail and message
 board. the access point serves at most 10 clients at a time.
 
+the firmware also builds for the ESP32-S3, where a larger flash gives the
+message board more room: about 5MB of text on 8MB, 13MB on 16MB. this has
+not run on a board yet.
+
 ## building
 
 the toolchain is pinned in `mise.toml`. with [mise](https://mise.jdx.dev)
@@ -45,6 +49,19 @@ the first firmware build downloads ESP-IDF into `firmware/.embuild`.
 
 `make backup` saves the current flash contents of a board before it is
 overwritten. use `PORT=/dev/ttyUSB1 make flash` for a different port.
+
+every target takes the board it is for:
+
+| variable   | default           | meaning                               |
+|------------|-------------------|---------------------------------------|
+| `BOARD`    | `esp32`           | the chip, `esp32` or `esp32s3`        |
+| `FLASH_MB` | `4`, on an S3 `8` | megabytes of its flash: 4, 8, or 16   |
+| `PORT`     | `/dev/ttyUSB0`    | serial port. the usb port of the S3   |
+|            |                   | itself shows up as `/dev/ttyACM0`     |
+
+    BOARD=esp32s3 FLASH_MB=16 PORT=/dev/ttyACM0 make flash
+
+a table for a larger flash than the board has does not start.
 
 ### settings
 

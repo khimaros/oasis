@@ -5,7 +5,7 @@
     crates/portal   platform independent portal, std only, zero dependencies
     crates/host     runs the portal on a development host
     crates/rpi      raspberry pi 4 binary: init of a linux image, then the portal
-    firmware        ESP32 binary: wifi access point + littlefs, then the portal
+    firmware        ESP32 and ESP32-S3 binary: wifi access point + littlefs, then the portal
     tools           builds the sd card image of the raspberry pi
     tests/e2e       python tests that drive the host binary over sockets
     tests/browser   a headless chrome that clicks through the page
@@ -149,6 +149,13 @@ the worst case is counted in blocks:
 the board's text budget is 1200KB, split evenly between the five topics
 (60KB of threads and 180KB of replies each). every limit is enforced by
 eviction, so the worst case cannot be exceeded.
+
+the firmware works the budget out from the size of the storage partition
+(`board_bytes` in `firmware/src/main.rs`): it keeps 324 blocks for the
+other rows and gives the board the segments that fit into the rest. a
+larger flash (R37) so grows the board alone, to 5296KB on 8MB and 13488KB
+on 16MB. accounts and mailboxes stay as they are, since their tables are
+held in RAM, which does not grow with the flash.
 
 ## identity
 
@@ -333,7 +340,17 @@ the body is a flex column: header, scrolling main, nav at the bottom. its
 height follows `visualViewport`, and the viewport meta asks browsers to
 resize for the keyboard, so the nav and chat box stay above it.
 
-flash layout (`firmware/partitions.csv`): 1.5MB app, no OTA slot (R2).
+flash layout (`firmware/partitions-<size>mb.csv`): 1.5MB app, no OTA slot
+(R2), and the storage up to the end of the flash.
+
+## boards
+
+`make BOARD=esp32s3 FLASH_MB=16 ...` builds for another chip and flash
+size. `BOARD` becomes the rust target (`xtensa-<board>-espidf`) and the
+`MCU` of ESP-IDF. `FLASH_MB` picks the partition table and the
+`sdkconfig.<size>mb` that is read after `sdkconfig.defaults`. the sources
+have no code per chip. every chip has its own directory under
+`firmware/target`, so switching does not rebuild the other.
 
 ## time
 
@@ -413,7 +430,8 @@ the address and the services without an access point. the qemu test uses
 
 ## limits
 
-the numbers of the ESP32. the raspberry pi has its own, see above.
+the numbers of the ESP32 and the ESP32-S3. the raspberry pi has its own,
+see above.
 
 | what                    | limit        |
 |-------------------------|--------------|

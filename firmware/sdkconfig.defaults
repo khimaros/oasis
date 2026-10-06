@@ -1,4 +1,4 @@
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# shared by every board. the flash size comes from sdkconfig.<size>
 # the main task opens the stores on littlefs, then accepts http connections
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_FREERTOS_HZ=1000

@@ -19,6 +19,26 @@ all three together:
 
 joining with wifi off or disconnected does not run into it.
 
+## who starts the switch
+
+it happened five times on 2026-10-05, and the log of four was read
+(09:50, 10:04, 10:05, 12:17). in each of those the phone began to move to `OASIS`
+by itself, about two seconds after the wifi settings were opened and with
+no connect request in the log: its network selection prefers the network
+that was picked by hand last. the tap on `OASIS` arrived about three
+seconds later, as a connect request from settings, while that automatic
+switch was under way. a join that was not interrupted like this, started
+over adb with nothing else connected, went through every time.
+
+## what the device sees
+
+the last occurrence was logged on the ESP32 too, and the two logs agree
+to the millisecond. the device saw two stations, since the phone uses a
+new random address per interface: the second interface joined, got
+`10.0.0.2`, and left after 2.6 s. then the first joined, got `10.0.0.3`,
+and left after 1.1 s. both left on their own (reason 8). the device
+answered dhcp and the connectivity probe as for any other client.
+
 ## what logcat shows
 
 the times are those of the first of two occurrences that day. the second,
@@ -53,13 +73,29 @@ server from `ANDROID_SERIAL` and `ANDROID_ADB_SERVER_PORT`:
 
 the log then shows `Starting primary ClientModeManager` and the phone is
 back on its old network a few seconds later. this worked every time it
-happened that day, four times, the first time with a `disabled` sent
+happened that day, five times, the first time with a `disabled` sent
 before it.
+
+the stop of `wlan0` does not always wait the full 4000 ms: in the last
+occurrence it ran after 3.1 s, when wifi calling moved to the mobile
+network.
 
 ## avoiding it
 
+- open the wifi settings and do not tap `OASIS`: wait for the phone to
+  move there by itself. not tried yet
+- or turn off auto-connect for `OASIS` on the phone, so that only the tap
+  starts a join. not tried yet
 - turn wifi off and on, or leave the current network, before joining
 - or turn wifi calling off while testing
+
+## what an oasis could do about it
+
+the path starts with the phone learning that the network is a captive
+portal while it still holds its old network. an oasis that answered the
+probe of android with success would not be seen as a portal, and the
+phone would finish the switch the ordinary way. the price is R4: android
+would no longer open the portal by itself. not tried.
 
 ## upstream
 

@@ -3,14 +3,15 @@
 ```
 [@] hardware: support for rpi4
 
-[>] board: show how many threads in a category
-[>] board: show how many messages in a thread
+[>] board: create "poll" threads or poll replies on a thread
 [>] board: voting for threads and replies
 [>] profile: opt-out from showing on user list
 [>] profile: show board posts from user
 [>] post to a person's profile "wall"
 [>] chat: some kind of p2p message synchronization for extended history?
 
+[x] board: show how many threads in a category
+[x] board: show how many messages in a thread
 [x] profile: button to send mail
 [x] notifications: show new mail
 [x] notifications: show thread replies

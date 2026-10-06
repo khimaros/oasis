@@ -7,6 +7,8 @@ over its own wifi hotspot.
 
 - R1: target the classic ESP32 (ESP32-D0WD-V3, 4MB flash, no PSRAM assumed)
 - R2: single app slot, no OTA updates, to maximize user data storage
+- R37: the same firmware builds for the ESP32-S3, with 4, 8, or 16MB of
+  flash. the board grows with the flash. PSRAM is not assumed
 - R30: a second target, the raspberry pi 4 model B, with the same
   functionality. oasis is the only program on the device: a minimal linux
   kernel boots straight into it
