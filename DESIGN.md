@@ -7,6 +7,7 @@
     crates/rpi      raspberry pi 4 binary: init of a linux image, then the portal
     firmware        ESP32 and ESP32-S3 binary: wifi access point + littlefs, then the portal
     tools           builds the sd card image of the raspberry pi
+    case            printed case of the ESP32-S3 board, an fcad model
     tests/e2e       python tests that drive the host binary over sockets
     tests/browser   a headless chrome that clicks through the page
     tests/rpi       boots the raspberry pi image in qemu

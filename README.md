@@ -30,8 +30,9 @@ with a CH340 usb serial adapter). about 2MB of flash holds the mail and message
 board. the access point serves at most 10 clients at a time.
 
 the firmware also builds for the ESP32-S3, where a larger flash gives the
-message board more room: about 5MB of text on 8MB, 13MB on 16MB. this has
-not run on a board yet.
+message board more room: about 5MB of text on 8MB, 13MB on 16MB.
+`docs/hardware.md` names the board it runs on, with 16MB, and describes a
+case for it that can be printed (`make case`).
 
 ## building
 

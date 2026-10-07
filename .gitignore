@@ -4,6 +4,7 @@ target/
 .esp-env.sh
 firmware/tls/
 oasis.conf
+case/dist/
 data/
 backup-*.bin
 __pycache__/

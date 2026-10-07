@@ -1,0 +1,208 @@
+# -*- mode: python -*- vim: ft=python
+"""a two part printed case for the ESP32-S3 N16R8 board of docs/hardware.md.
+
+the tray holds the board on its header pins. one end wall has a slot for
+the two usb plugs, the other a hole for the RP-SMA jack of the antenna
+pigtail, with a bay between the board and that wall for the jack and its
+cable. the lid is a plate with a rim: the rim goes around a lip on the
+tray, so that water on the lid runs off over the outside of the joint. a
+brow of the lid stands out over the usb slot.
+
+both parts print without supports. the tray prints as it stands. the lid is
+modeled the way it prints, plate down, and turned over in the assembly.
+
+the frame: x runs from the inside of the usb wall towards the antenna, y is
+centered on the board, z is zero on the floor that the pins stand on.
+
+measure a board before trusting the numbers marked "guess" in PARAMS.
+the `board` part is a stand-in built from the same numbers. it is in the
+assembly to show how the board sits, and to let `fcad check` find a
+collision. it is not printed.
+"""
+
+import Part
+from FreeCAD import Placement, Rotation, Vector
+
+import fcad
+from fcad import types
+from fcad.freecad import partdesign
+
+PARAMS = {
+    # the board, from the vendor's drawing
+    "board_len": 63.3,      # with the module that stands out over the end
+    "pcb_len": 57.0,
+    "pcb_wid": 28.0,
+    "pcb_thk": 1.6,
+    "module_wid": 18.0,
+    # a 2.54 mm header: 2.54 of plastic, then 6.1 of pin
+    "pin_drop": 8.7,
+    # height above the pcb of the module's shield and of a usb socket
+    "shield_top": 3.1,
+    "usb_top": 3.2,
+    # the slot is for one plug, in the socket of the chip itself: the left
+    # one seen from above with the sockets towards you, which is +y. the
+    # serial socket stays behind the wall. a plug's grip is at most
+    # 12.35 x 6.5 by the usb standard
+    "usb_offset": 7.0,      # guess: the socket's middle from the middle of the pcb
+    "usb_slot_wid": 13.0,
+    "usb_slot_hgt": 7.0,
+    # an RP-SMA jack has a 1/4 inch thread
+    "antenna_hole": 6.6,
+    # room behind the antenna wall for the jack, its crimp, and the cable
+    "antenna_bay": 26.0,
+    # the print
+    "wall": 2.4,
+    "floor": 2.0,
+    "lid": 2.0,
+    "lip": 2.5,
+    "headroom": 9.2,        # from the pcb to the lid
+    "brow": 4.0,
+    "fit": 0.2,             # gap between the lip and the rim, per side
+    "slack": 0.3,           # gap around the board, per side
+    "hold": 0.5,            # gap between the lid's pads and what they hold
+}
+
+# the tray must keep this much wall over the usb slot, under the lip
+MIN_BRIDGE = 1.0
+# how far into the bay a stop reaches, and its distance from the pcb
+STOP_LEN = 2.0
+# footprint of the pad over the shield, from the end of the module
+SHIELD_FROM_END = (10.0, 20.0)
+PAD_HALF_WID = 5.0
+# the pad over the usb sockets, from the usb wall
+USB_PAD = (1.0, 6.0)
+USB_PAD_HALF_WID = 10.0
+# the turn that stands a sketch on a wall: its x along y, its y along z
+ON_WALL = Rotation(Vector(1, 1, 1), 120)
+
+
+def _derive(p):
+    """the dimensions that follow from PARAMS, in the frame of the tray."""
+    pcb_top = p["pin_drop"] + p["pcb_thk"]
+    usb_mid = pcb_top + p["usb_top"] / 2.0
+    d = {
+        "len": p["board_len"] + 2 * p["slack"] + p["antenna_bay"],
+        "half": p["pcb_wid"] / 2.0 + p["slack"],
+        "pcb_top": pcb_top,
+        "ceiling": pcb_top + p["headroom"],
+        "slot": (usb_mid - p["usb_slot_hgt"] / 2.0, usb_mid + p["usb_slot_hgt"] / 2.0),
+    }
+    d["shoulder"] = d["ceiling"] - p["lip"]
+    d["bridge"] = d["shoulder"] - d["slot"][1]
+    return d
+
+
+CONSTRAINTS = [
+    lambda p, d: (d["bridge"] >= MIN_BRIDGE
+                  or "only %.1f mm of wall over the usb slot" % d["bridge"]),
+    lambda p, d: (p["usb_offset"] + p["usb_slot_wid"] / 2.0 < d["half"]
+                  or "the usb slot runs into the side wall"),
+    lambda p, d: (p["headroom"] > max(p["shield_top"], p["usb_top"]) + p["hold"]
+                  or "the lid touches the board"),
+    lambda p, d: (p["antenna_hole"] / 2.0 + p["wall"] < d["shoulder"] / 2.0
+                  or "the antenna hole leaves the wall"),
+]
+
+
+def _rect(x0, x1, half):
+    return [(x0, -half), (x1, -half), (x1, half), (x0, half)]
+
+
+def _pad(doc, body, name, points, z, length):
+    sketch = partdesign.add_sketch(doc, body, name, points=points, z=z)
+    pad = body.newObject(types.PartDesign.Pad, name + "_pad")
+    pad.Profile = sketch
+    pad.Length = length
+    doc.recompute()
+
+
+def _pocket(doc, body, sketch, length):
+    pocket = body.newObject(types.PartDesign.Pocket, sketch.Name + "_cut")
+    pocket.Profile = sketch
+    pocket.Length = length
+    doc.recompute()
+
+
+def _tray(doc, body, p, d):
+    wall, half, length = p["wall"], d["half"], d["len"]
+    outer = _rect(-wall, length + wall, half + wall)
+    _pad(doc, body, "shell", outer, -p["floor"], p["floor"] + d["shoulder"])
+    lip = wall / 2.0
+    _pad(doc, body, "lip", _rect(-lip, length + lip, half + lip), d["shoulder"], p["lip"])
+    cavity = partdesign.add_sketch(doc, body, "cavity", points=_rect(0, length, half),
+                                   z=d["ceiling"])
+    _pocket(doc, body, cavity, d["ceiling"])
+    # the pcb is wider than the module, and these catch its corners when a
+    # plug is pushed in
+    x0 = p["pcb_len"] + 2 * p["slack"]
+    for name, side in (("stop_a", 1), ("stop_b", -1)):
+        ys = sorted((side * (p["module_wid"] / 2.0 + 2 * p["slack"]), side * (half + wall / 2.0)))
+        points = [(x0, ys[0]), (x0 + STOP_LEN, ys[0]), (x0 + STOP_LEN, ys[1]), (x0, ys[1])]
+        _pad(doc, body, name, points, 0.0, d["pcb_top"])
+    y0, y1 = p["usb_offset"] - p["usb_slot_wid"] / 2.0, p["usb_offset"] + p["usb_slot_wid"] / 2.0
+    low, high = d["slot"]
+    slot = partdesign.add_sketch(doc, body, "usb_slot",
+                                 points=[(y0, low), (y1, low), (y1, high), (y0, high)],
+                                 placement=Placement(Vector(0, 0, 0), ON_WALL))
+    _pocket(doc, body, slot, wall)
+    hole = partdesign.add_sketch(doc, body, "antenna_hole",
+                                 circles=[(0.0, d["shoulder"] / 2.0, p["antenna_hole"])],
+                                 placement=Placement(Vector(length + wall, 0, 0), ON_WALL))
+    _pocket(doc, body, hole, wall)
+
+
+def _lid(doc, body, p, d):
+    """plate down, as printed. the assembly turns it over."""
+    wall, half, length, lid = p["wall"], d["half"], d["len"], p["lid"]
+    _pad(doc, body, "plate", _rect(-wall - p["brow"], length + wall, half + wall), 0.0, lid)
+    rim = p["lip"] - p["fit"]
+    _pad(doc, body, "rim", _rect(-wall, length + wall, half + wall), lid, rim)
+    inset = wall / 2.0 + p["fit"]
+    relief = partdesign.add_sketch(doc, body, "relief",
+                                   points=_rect(-inset, length + inset, half + inset), z=lid + rim)
+    _pocket(doc, body, relief, rim)
+    # these keep the board from lifting off its pins
+    end = p["slack"] + p["board_len"]
+    shield = _rect(end - SHIELD_FROM_END[1], end - SHIELD_FROM_END[0], PAD_HALF_WID)
+    _pad(doc, body, "shield_pad", shield, lid, p["headroom"] - p["shield_top"] - p["hold"])
+    usb = _rect(USB_PAD[0], USB_PAD[1], USB_PAD_HALF_WID)
+    _pad(doc, body, "usb_pad", usb, lid, p["headroom"] - p["usb_top"] - p["hold"])
+
+
+def _box(x0, x1, half, z0, z1):
+    return Part.makeBox(x1 - x0, 2 * half, z1 - z0, Vector(x0, -half, z0))
+
+
+def _board(p, d):
+    """the board as boxes: pcb, module, shield, usb sockets, and header rows."""
+    s, top = p["slack"], d["pcb_top"]
+    pcb = _box(s, s + p["pcb_len"], p["pcb_wid"] / 2.0, p["pin_drop"], top)
+    module = _box(s + p["board_len"] - 25.5, s + p["board_len"], p["module_wid"] / 2.0,
+                  top, top + 0.8)
+    shield = _box(s + p["board_len"] - 24.0, s + p["board_len"] - 6.5, 7.8, top, top + p["shield_top"])
+    usb = _box(s, s + 7.3, 11.0, top, top + p["usb_top"])
+    solid = pcb.fuse([module, shield, usb])
+    for side in (1, -1):
+        row = Part.makeBox(p["pcb_len"] - 1.0, 2.54, p["pin_drop"],
+                           Vector(s + 0.5, side * 12.7 - 1.27, 0.0))
+        solid = solid.fuse(row)
+    return solid.removeSplitter()
+
+
+def compute(p):
+    d = _derive(p)
+    turned = Placement(Vector(0, 0, d["ceiling"] + p["lid"]), Rotation(Vector(1, 0, 0), 180))
+    specs = [
+        fcad.PartSpec("tray", placements=[Placement()], grounded=True,
+                      length=d["len"] + 2 * p["wall"],
+                      build=lambda doc, body: _tray(doc, body, p, d),
+                      dimension_sketches=["antenna_hole"],
+                      openings=["cavity", "usb_slot", "antenna_hole"]),
+        fcad.PartSpec("lid", placements=[turned],
+                      length=d["len"] + 2 * p["wall"] + p["brow"],
+                      build=lambda doc, body: _lid(doc, body, p, d),
+                      openings=["relief"]),
+        fcad.PartSpec("board", placements=[Placement()], length=p["board_len"],
+                      solid=lambda: _board(p, d)),
+    ]
+    return {"specs": specs, **d}

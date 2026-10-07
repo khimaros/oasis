@@ -34,8 +34,19 @@ RPI_DATA_MB ?= 2048
 # accounts, and the first threads. see oasis.conf.example
 CONFIG := oasis.conf
 HOST := target/debug/oasis-host
+# the slicer for `make case-gcode`, not a pinned tool. the flatpak is run
+# by its program: its own start script does not wait for the slicer
+SLICER ?= flatpak run --command=prusa-slicer com.prusa3d.PrusaSlicer
+PRINTER ?= Creality Ender-3 V2 (0.4 mm nozzle)
+FILAMENT ?= Creality PLA @CREALITY
+PRINT_superdraft ?= 0.28 mm SUPERDRAFT (0.4 mm nozzle) @CREALITY
+PRINT_normal ?= 0.20 mm NORMAL (0.4 mm nozzle) @CREALITY
+QUALITIES := superdraft normal
+PRINTED := tray lid
+# the flatpak does not start in this directory, so the paths are whole
+GCODE_DIR := $(CURDIR)/case/dist/gcode
 
-.PHONY: build setup host check-config firmware rpi rpi-image flash wipe flash-wipe phone-wifi monitor backup run test-e2e test-browser test-rpi precommit clean
+.PHONY: build setup host check-config firmware rpi rpi-image flash wipe flash-wipe phone-wifi monitor backup case case-gcode run test-e2e test-browser test-rpi precommit clean
 
 build: host firmware rpi
 
@@ -108,6 +119,22 @@ monitor:
 # saves the full flash contents of the attached board before overwriting it
 backup:
 	$(MISE) espflash read-flash --port $(PORT) --baud $(BAUD) 0 $(FLASH_BYTES) backup-$(shell date +%Y%m%d-%H%M%S).bin
+
+# the printed case of docs/hardware.md. needs fcad and FreeCAD, which are
+# not pinned tools. the model holds the board too, so the mesh of all parts
+# in one, which is not for printing, is removed again
+case:
+	cd case && fcad precommit && fcad test
+	rm -f case/dist/case.stl
+
+# g-code of the tray and of the lid, one file per part and quality, in
+# case/dist/gcode. the presets are those that PrusaSlicer ships
+case-gcode: case
+	mkdir -p $(GCODE_DIR)
+	$(foreach quality,$(QUALITIES),$(foreach part,$(PRINTED),$(SLICER) --export-gcode \
+		--printer-profile "$(PRINTER)" --material-profile "$(FILAMENT)" \
+		--print-profile "$(PRINT_$(quality))" \
+		--output $(GCODE_DIR)/$(part)-$(quality).gcode $(CURDIR)/case/dist/parts/$(part).stl &&)) true
 
 # serves the portal on http://127.0.0.1:8080/
 run: host $(CONFIG)
